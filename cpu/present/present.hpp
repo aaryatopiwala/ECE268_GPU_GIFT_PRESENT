@@ -42,7 +42,7 @@ static void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
             key_reg2 = (key_reg2 & ~((uint64_t)0xF << 12)) | ((uint64_t)key_reg4 << 12);
 
             // round counter
-            key_reg1 ^= ((i + 1) & 0x1F) << 15;
+            key_reg1 ^= (((i + 1) & 0x1F) << 15);
         }
 
         curr_key[0] = key[0];
@@ -54,9 +54,9 @@ static void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
 }
 
 int present80_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
-    
     uint64_t state = *plaintext;
 
+    // generate round keys
     uint64_t round_keys[32];
     get_round_keys(key, round_keys);
 
@@ -101,9 +101,9 @@ const uint8_t inv_p_layer[64] = {
 };
 
 int present80_decrypt(const uint64_t *ciphertext, const uint64_t *key, uint64_t *plaintext) {
-    
     uint64_t state = *ciphertext;
 
+    // generate round keys
     uint64_t round_keys[32];
     get_round_keys(key, round_keys);
 
@@ -111,7 +111,6 @@ int present80_decrypt(const uint64_t *ciphertext, const uint64_t *key, uint64_t 
     state ^= round_keys[31];
 
     for (int round = 30; round >= 0; round--) {
-
         // inverse p-layer
         uint64_t new_state = 0;
         for (int i = 0; i < 64; i++) {
