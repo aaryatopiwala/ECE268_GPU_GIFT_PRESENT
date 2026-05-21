@@ -7,10 +7,3 @@
 #include <string>
 #include <iostream>
 #include <cuda_runtime.h>
-
-__global__ void GIFT_Kernel(){
-    int gs = gridDim.x;
-    int bs = blockDim.x;
-    int bx = blockIdx.x;
-    int tx = threadIdx.x;
-}
