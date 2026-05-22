@@ -32,8 +32,7 @@ const uint8_t inv_p_layer[64] = {
     3, 7, 11,15, 19, 23, 27, 31, 35, 39, 43, 47, 51, 55, 59, 63
 };
 
-__device__ void getRoundKeys(const uint64_t *key, uint64_t *round_keys) {
-    // Implementation for generating round keys
+static void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
     static uint64_t curr_key[2] = {0, 0};
     static uint64_t curr_round_keys[32] = {0};
     static bool valid = false;
@@ -66,11 +65,11 @@ __device__ void getRoundKeys(const uint64_t *key, uint64_t *round_keys) {
         valid = true;
     }
 
-    // Parallelize copying round keys to output
+    memcpy(round_keys, curr_round_keys, sizeof(uint64_t) * 32);
 }
 
-__device__ int present80_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
-     uint64_t state = *plaintext;
+int present80_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
+    uint64_t state = *plaintext;
 
     // generate round keys
     uint64_t round_keys[32];
@@ -100,9 +99,41 @@ __device__ int present80_encrypt(const uint64_t *plaintext, const uint64_t *key,
     // final round key addition
     state ^= round_keys[31];
 
-    // TODO: parallelize copying ciphertext to output
+    memcpy(ciphertext, &state, 8); // Copy the final state to ciphertext
+    return 0; // Return 0 on success
 }
 
-__device__ int present80_decrypt(const uint64_t *ciphertext, const uint64_t *key, uint64_t *plaintext) {
+int present80_decrypt(const uint64_t *ciphertext, const uint64_t *key, uint64_t *plaintext) {
+    uint64_t state = *ciphertext;
 
+    // generate round keys
+    uint64_t round_keys[32];
+    get_round_keys(key, round_keys);
+
+    // first round key addition
+    state ^= round_keys[31];
+
+    for (int round = 30; round >= 0; round--) {
+        // inverse p-layer
+        uint64_t new_state = 0;
+        for (int i = 0; i < 64; i++) {
+            uint8_t bit = (state >> i) & 1;
+            new_state |= ((uint64_t)bit << inv_p_layer[i]);
+        }
+        state = new_state;
+
+        // inverse s-box layer
+        for (int i = 0; i < 16; i++) {
+            uint8_t fourbits = (state >> (4 * i)) & 0xF;
+            fourbits = inv_sbox[fourbits];
+            state = (state & ~((uint64_t)0xF << (4 * i))) | ((uint64_t)fourbits << (4 * i));
+        }
+
+        // add round key
+        state ^= round_keys[round];
+        //fprintf(stdout, "Round %d: %016lx\n", round, state);
+    }
+
+    memcpy(plaintext, &state, 8); // Copy the final state to plaintext
+    return 0; // Return 0 on success
 }
