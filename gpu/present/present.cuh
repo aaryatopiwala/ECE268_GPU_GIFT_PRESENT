@@ -1,11 +1,6 @@
-#include <vector>
-#include <stdint.h>
-#include <algorithm>
-#include <stdio.h>
+#include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <string>
-#include <iostream>
+#include <cstdio>
 #include <cuda_runtime.h>
 
 const uint8_t sbox[16] = {
