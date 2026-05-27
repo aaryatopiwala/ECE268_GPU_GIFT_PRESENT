@@ -1,4 +1,4 @@
-// Cipher Block Chaining (CBC) with AES-128
+// Counter (CTR) with AES-128
 #include "aes.hpp"
 #include <cstdio>
 #include <cstdlib>
