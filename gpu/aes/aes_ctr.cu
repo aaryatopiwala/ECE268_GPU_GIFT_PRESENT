@@ -1,13 +1,18 @@
 // Counter (CTR) with AES-128
-#include "aes.cuh"
 #include <cstdio>
 #include <cstdlib>
 #include <string.h>
+#include "../utils/gpu_info.cuh"
+#include "../utils/timer.hpp"
+#include "aes.cuh"
 
 #define BUFFER_SIZE (8 * 1024 * 1024)
+#define NUM_STREAMS 4
 
-static void encrypt_ctr_buffer(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint64_t *key, uint64_t *counter) {
-    for (size_t i = 0; i < length; i += 16) {
+static void encryptCTRKernel(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint64_t *key, uint64_t *counter) {
+    size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+    for (size_t i = tid * 16; i < length; i += stride * 16) {
         // gift is 128 bit plaintext block
         uint64_t block1 = ((uint64_t)plaintext[i] << 56) | ((uint64_t)plaintext[i+1] << 48) |
                 ((uint64_t)plaintext[i+2] << 40) | ((uint64_t)plaintext[i+3] << 32) |
@@ -24,9 +29,6 @@ static void encrypt_ctr_buffer(const uint8_t *plaintext, uint8_t *ciphertext, si
         uint64_t block[2] = {block1, block2};
         uint64_t cipher_block[2];
         uint64_t cipher_block1, cipher_block2;
-        //printf("Plain block: %016lx %016lx\n", block[0], block[1]);
-        //printf("Key: %016lx %016lx\n", key[0], key[1]);
-        //printf("Prev cipher: %016lx %016lx\n", prev_cipher[0], prev_cipher[1]);
         aes128_encrypt(block, key, cipher_block);
 
         ciphertext[i+0] = ((cipher_block[0] >> 56) & 0xFF) ^ plaintext[i];
@@ -69,22 +71,23 @@ int main(int argc, char *argv[]) {
     // ./present_cbc -e plaintext.txt "key" "iv" ciphertext.bin --nopad
     // ./present_cbc -d ciphertext.txt "key" "iv" decrypted.txt --nopad
     // --nopad for no padding, useful for test vectors.
-    int no_pad = 0;
-    if (argc == 7 && strcmp(argv[6], "--nopad") == 0) {
-        no_pad = 1;
-    }
-
     if (argc != 6 && argc != 7) {
         fprintf(stderr, "Usage: %s -e|-d <input_file> <key> <iv> <output_file>\n", argv[0]);
         return 1;
     }
+    int no_pad = (argc == 7 && strcmp(argv[6], "--nopad") == 0) ? 1 : 0;
+
+    if (!gpuIsAvailable()) { 
+        fprintf(stderr, "No CUDA devices found.\n"); return 1; 
+    }
+    gpuPrintProperties();
+    gpuSelectBestDevice();
 
     FILE *input_file = fopen(argv[2], "rb");
     if (!input_file) {
         perror("Failed to open input file");
         return 1;
     }
-
     fseek(input_file, 0, SEEK_END);
     size_t total_size = ftell(input_file);
     fseek(input_file, 0, SEEK_SET);
@@ -93,7 +96,6 @@ int main(int argc, char *argv[]) {
     hex_to_key(argv[3], key);
     uint64_t iv[2] = {0, 0};
     hex_to_key(argv[4], iv);
-    //uint64_t iv = (uint64_t)strtoul(argv[4], NULL, 16);
 
     FILE *output_file = fopen(argv[5], "wb");
     if (!output_file) {
@@ -102,34 +104,42 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Pinned host buffers
+    uint8_t* h_in;
+    uint8_t* h_out;
+    cudaMallocHost(&h_in,  BUFFER_SIZE + 8);
+    cudaMallocHost(&h_out, BUFFER_SIZE + 8);
+
+    // Device buffers and key
+    uint8_t*  d_in;
+    uint8_t*  d_out;
+    uint64_t* d_key;
+    cudaMalloc(&d_in,  BUFFER_SIZE + 8);
+    cudaMalloc(&d_out, BUFFER_SIZE + 8);
+    cudaMalloc(&d_key, 2 * sizeof(uint64_t));
+    cudaMemcpy(d_key, key, 2 * sizeof(uint64_t), cudaMemcpyHostToDevice);
+
+    cudaStream_t streams[NUM_STREAMS];
+    for (int i = 0; i < NUM_STREAMS; i++)
+        cudaStreamCreate(&streams[i]);
+
+    Timer t;
+    t.start();
+
     if (strcmp(argv[1], "-e") == 0) {
-        uint8_t *plaintext = (uint8_t *)malloc(BUFFER_SIZE + 8);
-        uint8_t *ciphertext = (uint8_t *)malloc(BUFFER_SIZE + 8);
-
-        if (!plaintext || !ciphertext) {
-            fprintf(stderr, "Memory allocation failed\n");
-            fclose(input_file);
-            fclose(output_file);
-            return 1;
-        }
-
         uint64_t *prev_cipher = iv;
-        //printf("IV: %016lx %016lx, KEY: %016lx %016lx\n", iv[0], iv[1], key[0], key[1]);
         size_t total_processed = 0;
 
-        // streaming since can't malloc everything at once
         uint64_t counter0 = 0;
         uint64_t counter1 = 0;
         while (total_processed < total_size) {
             size_t to_read = (total_size - total_processed > BUFFER_SIZE) ? BUFFER_SIZE : (total_size - total_processed);
             size_t bytes_read = fread(plaintext, 1, to_read, input_file);
-
             if (bytes_read == 0) break;
 
             size_t process_size = bytes_read;
             bool is_last = (total_processed + bytes_read >= total_size);
 
-            // Apply PKCS7 padding only to last chunk if not --nopad
             if (is_last && !no_pad) {
                 size_t pad_len = 16 - (bytes_read % 16);
                 memset(plaintext + bytes_read, pad_len, pad_len);
@@ -137,30 +147,31 @@ int main(int argc, char *argv[]) {
             }
 
             uint64_t counter[2] = {counter0, counter1};
-            encrypt_ctr_buffer(plaintext, ciphertext, process_size, key, counter);
-
-            fwrite(ciphertext, 1, process_size, output_file);
+            int chunk_size = (int)(process_size / NUM_STREAMS) & ~7;
+            for (int s = 0; s < NUM_STREAMS; s++) {
+                int offset = s * chunk_size;
+                int current_chunk_size = (s == NUM_STREAMS - 1) ? (process_size - offset) : chunk_size;
+                if (current_chunk_size <= 0) continue;
+                uint64_t stream_counter = counter + (uint64_t)(offset / 8);
+                int num_blocks_per_chunk = current_chunk_size / 8;
+                int threads = 256;
+                int blocks  = (num_blocks_per_chunk + threads - 1) / threads;
+                if (blocks == 0) blocks = 1;
+                cudaMemcpyAsync(d_in + offset, h_in + offset, current_chunk_size, cudaMemcpyHostToDevice, streams[s]);
+                encryptCTRKernel<<<blocks, threads, 0, streams[s]>>>(d_in + offset, d_out + offset, current_chunk_size, d_key, stream_counter);
+                cudaMemcpyAsync(h_out + offset, d_out + offset, current_chunk_size, cudaMemcpyDeviceToHost, streams[s]);
+            }
+            cudaDeviceSynchronize();
+            size_t write_size = process_size;
+            
+            fwrite(h_out, 1, write_size, output_file);
             total_processed += bytes_read;
             counter0++;
             if (counter0 == 0) {
                 counter1++;
             }
         }
-
-        free(plaintext);
-        free(ciphertext);
-
     } else if (strcmp(argv[1], "-d") == 0) {
-        uint8_t *ciphertext = (uint8_t *)malloc(BUFFER_SIZE);
-        uint8_t *plaintext = (uint8_t *)malloc(BUFFER_SIZE);
-
-        if (!ciphertext || !plaintext) {
-            fprintf(stderr, "Memory allocation failed\n");
-            fclose(input_file);
-            fclose(output_file);
-            return 1;
-        }
-
         uint64_t *prev_cipher = iv;
         size_t total_processed = 0;
 
@@ -169,19 +180,27 @@ int main(int argc, char *argv[]) {
         while (total_processed < total_size) {
             size_t to_read = (total_size - total_processed > BUFFER_SIZE) ? BUFFER_SIZE : (total_size - total_processed);
             size_t bytes_read = fread(ciphertext, 1, to_read, input_file);
-
             if (bytes_read == 0) break;
 
             bool is_last = (total_processed + bytes_read >= total_size);
-
-            //printf("prev_cipher: %016lx %016lx\n; key: %016lx %016lx\n ", prev_cipher[0], prev_cipher[1], key[0], key[1]);
-            // ctr mode uses encrypt for decrypt
             uint64_t counter[2] = {counter0, counter1};
-            encrypt_ctr_buffer(ciphertext, plaintext, bytes_read, key, counter);
+            int chunk_size = (int)(process_size / NUM_STREAMS) & ~7;
+            for (int s = 0; s < NUM_STREAMS; s++) {
+                int offset = s * chunk_size;
+                int current_chunk_size = (s == NUM_STREAMS - 1) ? (process_size - offset) : chunk_size;
+                if (current_chunk_size <= 0) continue;
+                uint64_t stream_counter = counter + (uint64_t)(offset / 8);
+                int num_blocks_per_chunk = current_chunk_size / 8;
+                int threads = 256;
+                int blocks  = (num_blocks_per_chunk + threads - 1) / threads;
+                if (blocks == 0) blocks = 1;
+                cudaMemcpyAsync(d_in + offset, h_in + offset, current_chunk_size, cudaMemcpyHostToDevice, streams[s]);
+                encryptCTRKernel<<<blocks, threads, 0, streams[s]>>>(d_in + offset, d_out + offset, current_chunk_size, d_key, stream_counter);
+                cudaMemcpyAsync(h_out + offset, d_out + offset, current_chunk_size, cudaMemcpyDeviceToHost, streams[s]);
+            }
+            cudaDeviceSynchronize();
+            size_t write_size = process_size;
 
-            size_t write_size = bytes_read;
-
-            // Remove PKCS7 padding only from last chunk if not --nopad
             if (is_last && !no_pad) {
                 uint8_t pad_len = plaintext[bytes_read - 1];
                 if (pad_len > 0 && pad_len <= 16) {
@@ -191,17 +210,13 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            fwrite(plaintext, 1, write_size, output_file);
+            fwrite(h_out, 1, write_size, output_file);
             total_processed += bytes_read;
             counter0++;
             if (counter0 == 0) {
                 counter1++;
             }
         }
-
-        free(ciphertext);
-        free(plaintext);
-
     } else {
         fprintf(stderr, "Invalid option: %s\n", argv[1]);
         fclose(input_file);
@@ -209,6 +224,14 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    fprintf(stdout, "[timer] total: %ld ms\n", t.stopMs());
+
+    for (int i = 0; i < NUM_STREAMS; i++) cudaStreamDestroy(streams[i]);
+    cudaFree(d_in);
+    cudaFree(d_out);
+    cudaFree(d_key);
+    cudaFreeHost(h_in);
+    cudaFreeHost(h_out);
     fclose(input_file);
     fclose(output_file);
     return 0;
