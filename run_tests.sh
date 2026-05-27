@@ -13,35 +13,32 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo "=========================================="
 echo "Running Cipher Tests"
-echo "=========================================="
 echo "Results stored in: $RUNS_DIR/"
 if [ -n "$EXTRA_ARGS" ]; then
     echo "Options: $EXTRA_ARGS"
 fi
 echo ""
 
-# Define which ciphers and modes to test
-# Format: "cipher:mode cpu/gpu"
+# Define which ciphers and modes to test, "cipher:mode cpu/gpu"
 declare -a TESTS=(
     # PRESENT Tests
     "present:ctr:gpu"
     # "present:cbc:gpu"
-    # "present:ctr:cpu"
-    # "present:cbc:cpu"
+    "present:ctr:cpu"
+    "present:cbc:cpu"
     
     # GIFT Tests (commented out for future implementation)
     # "gift:ctr:gpu"
     # "gift:cbc:gpu"
-    # "gift:ctr:cpu"
-    # "gift:cbc:cpu"
+    "gift:ctr:cpu"
+    "gift:cbc:cpu"
     
     # AES Tests (commented out for future implementation)
     # "aes:ctr:gpu"
     # "aes:cbc:gpu"
-    # "aes:ctr:cpu"
-    # "aes:cbc:cpu"
+    "aes:ctr:cpu"
+    "aes:cbc:cpu"
 )
 
 # Run each test
@@ -60,15 +57,11 @@ for test in "${TESTS[@]}"; do
     fi
     
     echo ""
-    echo "=========================================="
     echo "Running ${platform^^} $cipher $mode tests"
-    echo "=========================================="
     
     bash "$test_script" $EXTRA_ARGS
 done
 
 echo ""
-echo "=========================================="
 echo "All tests completed!"
 echo "Results stored in: $RUNS_DIR/"
-echo "=========================================="
