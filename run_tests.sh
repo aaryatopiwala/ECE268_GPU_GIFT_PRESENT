@@ -2,66 +2,67 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUNS_DIR="$REPO_DIR/runs"
-EXTRA_ARGS=""
+CPU_RUNNER="$REPO_DIR/cpu/run_tests.sh"
+GPU_RUNNER="$REPO_DIR/gpu/run_tests.sh"
 
-# Parse command line arguments
+BACKEND="all"
+ARGS=()
+
+usage() {
+    cat <<EOF
+Usage: $0 [options] [-- <nested options>]
+
+Options:
+  --backend <cpu|gpu|all>   Choose which backend to run (default: all)
+  --help                    Show this help message
+
+All other flags are forwarded to the nested CPU and GPU runners.
+Examples:
+  $0 --cipher present --mode ctr
+  $0 --backend gpu -- --cipher gift --mode cbc
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
-    case $1 in
-        --profile) EXTRA_ARGS="--profile"; shift ;;
-        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    case "$1" in
+        --backend)
+            BACKEND="${2,,}"
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            ARGS+=("$@")
+            break
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
     esac
 done
 
-echo "Running Cipher Tests"
-echo "Results stored in: $RUNS_DIR/"
-if [ -n "$EXTRA_ARGS" ]; then
-    echo "Options: $EXTRA_ARGS"
+run_backend() {
+    local backend="$1"
+    local runner="$2"
+
+    if [ "$BACKEND" = "all" ] || [ "$BACKEND" = "$backend" ]; then
+        echo "Running $backend tests"
+        bash "$runner" "${ARGS[@]}"
+        echo ""
+    fi
+}
+
+if [ "$BACKEND" != "all" ] && [ "$BACKEND" != "cpu" ] && [ "$BACKEND" != "gpu" ]; then
+    echo "Unknown backend: $BACKEND" >&2
+    usage
+    exit 1
 fi
-echo ""
 
-# Define which ciphers and modes to test, "cipher:mode cpu/gpu"
-declare -a TESTS=(
-    # PRESENT Tests
-    "present:ctr:gpu"
-    # "present:cbc:gpu"
-    "present:ctr:cpu"
-    "present:cbc:cpu"
-    
-    # GIFT Tests (commented out for future implementation)
-    # "gift:ctr:gpu"
-    # "gift:cbc:gpu"
-    "gift:ctr:cpu"
-    "gift:cbc:cpu"
-    
-    # AES Tests (commented out for future implementation)
-    # "aes:ctr:gpu"
-    # "aes:cbc:gpu"
-    "aes:ctr:cpu"
-    "aes:cbc:cpu"
-)
+run_backend cpu "$CPU_RUNNER"
+run_backend gpu "$GPU_RUNNER"
 
-# Run each test
-for test in "${TESTS[@]}"; do
-    IFS=: read -r cipher mode platform <<< "$test"
-    
-    if [ -z "$cipher" ] || [ -z "$mode" ] || [ -z "$platform" ]; then
-        continue
-    fi
-    
-    test_script="$REPO_DIR/$platform/$cipher/test_${mode}.sh"
-    
-    if [ ! -f "$test_script" ]; then
-        echo "WARNING: Test script not found: $test_script"
-        continue
-    fi
-    
-    echo ""
-    echo "Running ${platform^^} $cipher $mode tests"
-    
-    bash "$test_script" $EXTRA_ARGS
-done
-
-echo ""
-echo "All tests completed!"
-echo "Results stored in: $RUNS_DIR/"
+echo "All requested tests completed."
