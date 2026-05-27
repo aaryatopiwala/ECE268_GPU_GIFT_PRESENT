@@ -32,8 +32,6 @@ Options:
   --iv <hex>                        Override default IV for all test files
   --profile                         Enable nsys GPU profiling for each run
   --help                            Show this help message
-
-Note: AES GPU implementation is not available yet; AES tests will be skipped.
 EOF
 }
 
@@ -89,18 +87,6 @@ should_test_mode() {
         return 0
     fi
     [ "$mode" = "$SELECT_MODE" ]
-}
-
-is_gpu_cipher_supported() {
-    local cipher="$1"
-    case "$cipher" in
-        aes)
-            return 1
-            ;;
-        *)
-            return 0
-            ;;
-    esac
 }
 
 num_cpus() {
@@ -226,17 +212,6 @@ for cipher in "${SUPPORTED_CIPHERS[@]}"; do
     fi
     for mode in "${SUPPORTED_MODES[@]}"; do
         if ! should_test_mode "$mode"; then
-            continue
-        fi
-        if ! is_gpu_cipher_supported "$cipher"; then
-            echo "Skipping GPU $cipher $mode: AES GPU implementation is not available yet."
-            output_dir="$RUNS_DIR/gpu/$cipher/$mode"
-            mkdir -p "$output_dir"
-            results_file="$output_dir/results.txt"
-            printf "GPU %s %s Results\n" "$cipher" "$mode" > "$results_file"
-            printf "%s\n" "" >> "$results_file"
-            printf "Timestamp: %s\n\n" "$(date)" >> "$results_file"
-            printf "WARNING: GPU AES implementation is not available yet; test skipped.\n" >> "$results_file"
             continue
         fi
         run_test "$cipher" "$mode"
