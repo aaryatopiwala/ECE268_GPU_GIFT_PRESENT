@@ -10,10 +10,22 @@
 
 __global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext,
                                   int n, const uint64_t* key, uint64_t counter) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int i   = idx * 8;
-    if (i >= n) return;
-    // TODO: implement PRESENT-80 CTR encrypt
+    size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+    for (size_t i = tid * 8; i < length; i += stride * 8) {
+        uint64_t block = *counter;
+        uint64_t cipher_block;
+        present80_encrypt(&block, key, &cipher_block);
+
+        ciphertext[i] = ((cipher_block >> 56) & 0xFF) ^ plaintext[i];
+        ciphertext[i+1] = ((cipher_block >> 48) & 0xFF) ^ plaintext[i+1];
+        ciphertext[i+2] = ((cipher_block >> 40) & 0xFF) ^ plaintext[i+2];
+        ciphertext[i+3] = ((cipher_block >> 32) & 0xFF) ^ plaintext[i+3];
+        ciphertext[i+4] = ((cipher_block >> 24) & 0xFF) ^ plaintext[i+4];
+        ciphertext[i+5] = ((cipher_block >> 16) & 0xFF) ^ plaintext[i+5];
+        ciphertext[i+6] = ((cipher_block >> 8) & 0xFF) ^ plaintext[i+6];
+        ciphertext[i+7] = ((cipher_block >> 0) & 0xFF) ^ plaintext[i+7];
+    }
 }
 
 static void hex_to_key(const char* hex_str, uint64_t* key) {

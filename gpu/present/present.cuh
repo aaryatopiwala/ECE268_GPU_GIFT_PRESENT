@@ -2,6 +2,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cuda_runtime.h>
+#include "../utils/t_tables.cuh"
 
 const uint8_t sbox[16] = {
     0xC, 0x5, 0x6, 0xB, 0x9, 0x0, 0xA, 0xD,
@@ -27,7 +28,7 @@ const uint8_t inv_p_layer[64] = {
     3, 7, 11,15, 19, 23, 27, 31, 35, 39, 43, 47, 51, 55, 59, 63
 };
 
-static void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
+__device__ static void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
     static uint64_t curr_key[2] = {0, 0};
     static uint64_t curr_round_keys[32] = {0};
     static bool valid = false;
@@ -63,7 +64,7 @@ static void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
     memcpy(round_keys, curr_round_keys, sizeof(uint64_t) * 32);
 }
 
-int present80_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
+__device__ int present80_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
     uint64_t state = *plaintext;
 
     // generate round keys
@@ -74,18 +75,11 @@ int present80_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *
         // add round key
         state ^= round_keys[round];
 
-        // s-box layer
-        for (int i = 0; i < 16; i++) {
-            uint8_t fourbits = (state >> (4 * i)) & 0xF;
-            fourbits = sbox[fourbits];
-            state = (state & ~((uint64_t)0xF << (4 * i))) | ((uint64_t)fourbits << (4 * i));
-        }
-
-        // p-layer
+        // t-table access
         uint64_t new_state = 0;
-        for (int i = 0; i < 64; i++) {
-            uint8_t bit = (state >> i) & 1;
-            new_state |= ((uint64_t)bit << p_layer[i]);
+        for (int i = 0; i < 16; i++) {
+            uint8_t nibble = (state >> (i * 4)) & 0xF;
+            new_state |= d_T[i][nibble];
         }
         state = new_state;
         //fprintf(stdout, "Round %d: %016lx\n", round, state);
@@ -98,7 +92,7 @@ int present80_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *
     return 0; // Return 0 on success
 }
 
-int present80_decrypt(const uint64_t *ciphertext, const uint64_t *key, uint64_t *plaintext) {
+__device__ int present80_decrypt(const uint64_t *ciphertext, const uint64_t *key, uint64_t *plaintext) {
     uint64_t state = *ciphertext;
 
     // generate round keys
