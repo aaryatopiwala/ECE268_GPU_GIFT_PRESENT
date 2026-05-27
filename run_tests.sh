@@ -42,7 +42,11 @@ run_present_tests() {
             
             # Convert binary files to hex
             key_hex=$(xxd -p -c 256 "$key_file")
-            iv_hex="0000000000000000"  # Null IV for CTR mode
+            if [ -f "$vector_dir/iv.bin" ]; then
+                iv_hex=$(xxd -p -c 256 "$vector_dir/iv.bin")
+            else
+                iv_hex="0000000000000000"
+            fi
             
             encrypted_output="$TEMP_DIR/${vector_name}_encrypted.bin"
             decrypted_output="$TEMP_DIR/${vector_name}_decrypted.bin"
@@ -56,7 +60,8 @@ run_present_tests() {
                 --input "$plaintext_file" \
                 --key "$key_hex" \
                 --iv "$iv_hex" \
-                --output "$encrypted_output"
+                --output "$encrypted_output" \
+                --nopad
             
             # Compare encrypted output with expected ciphertext
             if cmp -s "$encrypted_output" "$ciphertext_file"; then
@@ -76,7 +81,8 @@ run_present_tests() {
                 --input "$ciphertext_file" \
                 --key "$key_hex" \
                 --iv "$iv_hex" \
-                --output "$decrypted_output"
+                --output "$decrypted_output" \
+                --nopad
             
             # Compare decrypted output with original plaintext
             if cmp -s "$decrypted_output" "$plaintext_file"; then
