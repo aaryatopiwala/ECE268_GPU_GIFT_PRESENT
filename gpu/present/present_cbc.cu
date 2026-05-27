@@ -8,13 +8,60 @@
 #define BUFFER_SIZE (8 * 1024 * 1024)
 #define NUM_STREAMS 4
 
-__global__ void encryptCBCKernel(const uint8_t* plaintext, uint8_t* ciphertext,
-                                  int n, const uint64_t* key, uint64_t iv) {
-    if (threadIdx.x != 0 || blockIdx.x != 0) return;
+__global__ void encryptCBCKernel(const uint8_t* plaintext, uint8_t* ciphertext, 
+                                 size_t length, const uint64_t* key, uint64_t iv) {
+    uint64_t prev = iv;
+    for (size_t i = 0; i < length; i += 8) {
+        uint64_t block = ((uint64_t)plaintext[i] << 56) | ((uint64_t)plaintext[i+1] << 48) |
+                         ((uint64_t)plaintext[i+2] << 40) | ((uint64_t)plaintext[i+3] << 32) |
+                         ((uint64_t)plaintext[i+4] << 24) | ((uint64_t)plaintext[i+5] << 16) |
+                         ((uint64_t)plaintext[i+6] << 8)  | ((uint64_t)plaintext[i+7]);
+        block ^= prev;
+        uint64_t cipher_block;
+        present80_encrypt(&block, key, &cipher_block);
+
+        ciphertext[i] = (cipher_block >> 56) & 0xFF;
+        ciphertext[i+1] = (cipher_block >> 48) & 0xFF;
+        ciphertext[i+2] = (cipher_block >> 40) & 0xFF;
+        ciphertext[i+3] = (cipher_block >> 32) & 0xFF;
+        ciphertext[i+4] = (cipher_block >> 24) & 0xFF;
+        ciphertext[i+5] = (cipher_block >> 16) & 0xFF;
+        ciphertext[i+6] = (cipher_block >> 8) & 0xFF;
+        ciphertext[i+7] = (cipher_block >> 0) & 0xFF;
+        
+        prev = cipher_block;
+    }
 }
 
-__global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext,
-                                  int n, const uint64_t* key, uint64_t iv) {
+__global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext, 
+                                 size_t length, const uint64_t* key, uint64_t iv) {
+    size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+    for (size_t i = tid * 8; i < length; i += stride * 8) {
+        uint64_t cipher_block = ((uint64_t)ciphertext[i] << 56) | ((uint64_t)ciphertext[i+1] << 48) |
+                                ((uint64_t)ciphertext[i+2] << 40) | ((uint64_t)ciphertext[i+3] << 32) |
+                                ((uint64_t)ciphertext[i+4] << 24) | ((uint64_t)ciphertext[i+5] << 16) |
+                                ((uint64_t)ciphertext[i+6] << 8)  | ((uint64_t)ciphertext[i+7]);
+
+        uint64_t block;
+        present80_decrypt(&cipher_block, key, &block);
+        
+        uint64_t prev = (i == 0) ? iv : (((uint64_t)ciphertext[i-8] << 56) | ((uint64_t)ciphertext[i-7] << 48) |
+                                         ((uint64_t)ciphertext[i-6] << 40) | ((uint64_t)ciphertext[i-5] << 32) |
+                                         ((uint64_t)ciphertext[i-4] << 24) | ((uint64_t)ciphertext[i-3] << 16) |
+                                         ((uint64_t)ciphertext[i-2] << 8)  | ((uint64_t)ciphertext[i-1]));
+        
+        block ^= prev;
+
+        plaintext[i] = (uint8_t)((block ^ *prev_cipher) >> 56);
+        plaintext[i+1] = (uint8_t)((block ^ *prev_cipher) >> 48);
+        plaintext[i+2] = (uint8_t)((block ^ *prev_cipher) >> 40);
+        plaintext[i+3] = (uint8_t)((block ^ *prev_cipher) >> 32);
+        plaintext[i+4] = (uint8_t)((block ^ *prev_cipher) >> 24);
+        plaintext[i+5] = (uint8_t)((block ^ *prev_cipher) >> 16);
+        plaintext[i+6] = (uint8_t)((block ^ *prev_cipher) >> 8);
+        plaintext[i+7] = (uint8_t)((block ^ *prev_cipher) >> 0);
+    }
 }
 
 static void hex_to_key(const char* hex_str, uint64_t* key) {
