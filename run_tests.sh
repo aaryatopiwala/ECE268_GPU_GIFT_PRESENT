@@ -2,212 +2,61 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEST_DATA_DIR="$REPO_DIR/test_data"
-GPU_RUN_SCRIPT="$REPO_DIR/gpu/run.sh"
-TEMP_DIR=$(mktemp -d)
+RUNS_DIR="$REPO_DIR/runs"
 
-cleanup() {
-    rm -rf "$TEMP_DIR"
-}
-trap cleanup EXIT
+echo "=========================================="
+echo "Running Cipher Tests"
+echo "=========================================="
+echo "Results stored in: $RUNS_DIR/"
+echo ""
 
-echo "Running GPU cipher tests..."
-
-run_present_tests() {
-    local cipher="present"
-    local test_data_path="$TEST_DATA_DIR/$cipher"
+# Define which ciphers and modes to test
+# Format: "cipher:mode cpu/gpu"
+declare -a TESTS=(
+    # PRESENT Tests
+    "present:ctr:gpu"
+    # "present:cbc:gpu"
+    # "present:ctr:cpu"
+    # "present:cbc:cpu"
     
-    if [ ! -d "$test_data_path" ]; then
-        echo "ERROR: Test data directory for $cipher not found at $test_data_path"
-        return 1
+    # GIFT Tests (commented out for future implementation)
+    # "gift:ctr:gpu"
+    # "gift:cbc:gpu"
+    # "gift:ctr:cpu"
+    # "gift:cbc:cpu"
+    
+    # AES Tests (commented out for future implementation)
+    # "aes:ctr:gpu"
+    # "aes:cbc:gpu"
+    # "aes:ctr:cpu"
+    # "aes:cbc:cpu"
+)
+
+# Run each test
+for test in "${TESTS[@]}"; do
+    IFS=: read -r cipher mode platform <<< "$test"
+    
+    if [ -z "$cipher" ] || [ -z "$mode" ] || [ -z "$platform" ]; then
+        continue
+    fi
+    
+    test_script="$REPO_DIR/$platform/$cipher/test_${mode}.sh"
+    
+    if [ ! -f "$test_script" ]; then
+        echo "WARNING: Test script not found: $test_script"
+        continue
     fi
     
     echo ""
-    echo "PRESENT Tests"
+    echo "=========================================="
+    echo "Running ${platform^^} $cipher $mode tests"
+    echo "=========================================="
     
-    # CTR Mode Tests
-    echo ""
-    echo "--- PRESENT CTR Mode ---"
-    for vector_dir in "$test_data_path"/vector_*; do
-        if [ -d "$vector_dir" ]; then
-            vector_name=$(basename "$vector_dir")
-            plaintext_file="$vector_dir/plaintext.bin"
-            key_file="$vector_dir/key.bin"
-            ciphertext_file="$vector_dir/ciphertext.bin"
-            
-            if [ ! -f "$plaintext_file" ] || [ ! -f "$key_file" ] || [ ! -f "$ciphertext_file" ]; then
-                echo "WARNING: Missing test files in $vector_dir, skipping"
-                continue
-            fi
-            
-            # Convert binary files to hex
-            key_hex=$(xxd -p -c 256 "$key_file")
-            if [ -f "$vector_dir/iv.bin" ]; then
-                iv_hex=$(xxd -p -c 256 "$vector_dir/iv.bin")
-            else
-                iv_hex="0000000000000000"
-            fi
-            
-            encrypted_output="$TEMP_DIR/${vector_name}_encrypted.bin"
-            decrypted_output="$TEMP_DIR/${vector_name}_decrypted.bin"
-            
-            # Test encryption
-            echo -n "  Testing $vector_name encryption... "
-            "$GPU_RUN_SCRIPT" \
-                --cipher "$cipher" \
-                --mode ctr \
-                --encrypt \
-                --input "$plaintext_file" \
-                --key "$key_hex" \
-                --iv "$iv_hex" \
-                --output "$encrypted_output" \
-                --nopad
-            
-            # Compare encrypted output with expected ciphertext
-            if cmp -s "$encrypted_output" "$ciphertext_file"; then
-                echo "PASS"
-            else
-                echo "FAIL"
-                echo "    Expected ciphertext: $(xxd -p "$ciphertext_file")"
-                echo "    Got:                 $(xxd -p "$encrypted_output")"
-            fi
-            
-            # Test decryption
-            echo -n "  Testing $vector_name decryption... "
-            "$GPU_RUN_SCRIPT" \
-                --cipher "$cipher" \
-                --mode ctr \
-                --decrypt \
-                --input "$ciphertext_file" \
-                --key "$key_hex" \
-                --iv "$iv_hex" \
-                --output "$decrypted_output" \
-                --nopad
-            
-            # Compare decrypted output with original plaintext
-            if cmp -s "$decrypted_output" "$plaintext_file"; then
-                echo "PASS"
-            else
-                echo "FAIL"
-                echo "    Expected plaintext: $(xxd -p "$plaintext_file")"
-                echo "    Got:                $(xxd -p "$decrypted_output")"
-            fi
-        fi
-    done
-    
-    # CBC Mode Tests
-    # echo ""
-    # echo "--- PRESENT CBC Mode ---"
-    # for vector_dir in "$test_data_path"/vector_*; do
-    #     if [ -d "$vector_dir" ]; then
-    #         vector_name=$(basename "$vector_dir")
-    #         plaintext_file="$vector_dir/plaintext.bin"
-    #         key_file="$vector_dir/key.bin"
-    #         ciphertext_file="$vector_dir/ciphertext.bin"
-    #         
-    #         if [ ! -f "$plaintext_file" ] || [ ! -f "$key_file" ] || [ ! -f "$ciphertext_file" ]; then
-    #             echo "WARNING: Missing test files in $vector_dir, skipping"
-    #             continue
-    #         fi
-    #         
-    #         # Convert binary files to hex
-    #         key_hex=$(xxd -p -c 256 "$key_file")
-    #         iv_hex="0000000000000000"  # Null IV for testing
-    #         
-    #         encrypted_output="$TEMP_DIR/${vector_name}_cbc_encrypted.bin"
-    #         decrypted_output="$TEMP_DIR/${vector_name}_cbc_decrypted.bin"
-    #         
-    #         # Test encryption
-    #         echo -n "  Testing $vector_name encryption... "
-    #         "$GPU_RUN_SCRIPT" \
-    #             --cipher "$cipher" \
-    #             --mode cbc \
-    #             --encrypt \
-    #             --input "$plaintext_file" \
-    #             --key "$key_hex" \
-    #             --iv "$iv_hex" \
-    #             --output "$encrypted_output"
-    #         
-    #         # Compare encrypted output with expected ciphertext
-    #         if cmp -s "$encrypted_output" "$ciphertext_file"; then
-    #             echo "PASS"
-    #         else
-    #             echo "FAIL"
-    #         fi
-    #         
-    #         # Test decryption
-    #         echo -n "  Testing $vector_name decryption... "
-    #         "$GPU_RUN_SCRIPT" \
-    #             --cipher "$cipher" \
-    #             --mode cbc \
-    #             --decrypt \
-    #             --input "$ciphertext_file" \
-    #             --key "$key_hex" \
-    #             --iv "$iv_hex" \
-    #             --output "$decrypted_output"
-    #         
-    #         # Compare decrypted output with original plaintext
-    #         if cmp -s "$decrypted_output" "$plaintext_file"; then
-    #             echo "PASS"
-    #         else
-    #             echo "FAIL"
-    #         fi
-    #     fi
-    # done
-}
-
-# run_gift_tests() {
-#     local cipher="gift"
-#     local test_data_path="$TEST_DATA_DIR/$cipher"
-#     
-#     if [ ! -d "$test_data_path" ]; then
-#         echo "WARNING: Test data directory for $cipher not found at $test_data_path"
-#         return 0
-#     fi
-#     
-#     # CTR Mode Tests (commented out)
-#     # echo ""
-#     # echo "--- GIFT CTR Mode ---"
-#     # for vector_dir in "$test_data_path"/vector_*; do
-#     #     ...
-#     # done
-#     
-#     # CBC Mode Tests (commented out)
-#     # echo ""
-#     # echo "--- GIFT CBC Mode ---"
-#     # for vector_dir in "$test_data_path"/vector_*; do
-#     #     ...
-#     # done
-# }
-
-# run_aes_tests() {
-#     local cipher="aes"
-#     local test_data_path="$TEST_DATA_DIR/$cipher"
-#     
-#     if [ ! -d "$test_data_path" ]; then
-#         echo "WARNING: Test data directory for $cipher not found at $test_data_path"
-#         return 0
-#     fi
-#     
-#     
-#     # CTR Mode Tests (commented out)
-#     # echo ""
-#     # echo "--- AES CTR Mode ---"
-#     # for vector_dir in "$test_data_path"/vector_*; do
-#     #     ...
-#     # done
-#     
-#     # CBC Mode Tests (commented out)
-#     # echo ""
-#     # echo "--- AES CBC Mode ---"
-#     # for vector_dir in "$test_data_path"/vector_*; do
-#     #     ...
-#     # done
-# }
-
-run_present_tests
-# run_gift_tests
-# run_aes_tests
+    bash "$test_script"
+done
 
 echo ""
+echo "=========================================="
 echo "All tests completed!"
+echo "Results stored in: $RUNS_DIR/"
+echo "=========================================="
