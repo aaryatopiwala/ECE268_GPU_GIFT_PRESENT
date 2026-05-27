@@ -8,8 +8,7 @@
 #define BUFFER_SIZE (8 * 1024 * 1024)
 #define NUM_STREAMS 4
 
-__global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext,
-                                  int n, const uint64_t* key, uint64_t counter) {
+__global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext, size_t length, const uint64_t* key, uint64_t counter) {
     size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
     for (size_t i = tid * 8; i < length; i += stride * 8) {
@@ -111,18 +110,20 @@ int main(int argc, char* argv[]) {
             process_size = bytes_read + pad_len;
         }
 
-        int chunk_size      = (int)(length / NUM_STREAMS) & ~7;
-        int num_blocks_per_chunk = chunk_size / 8;
-        int threads = 256;
-        int blocks  = (num_blocks_per_chunk + threads - 1) / threads;
+        int chunk_size      = (int)(process_size / NUM_STREAMS) & ~7;
 
         for (int s = 0; s < NUM_STREAMS; s++) {
-            int      offset        = s * chunk_size;
+            int offset = s * chunk_size;
+            int current_chunk_size = (s == NUM_STREAMS - 1) ? (process_size - offset) : chunk_size;
+            if (current_chunk_size <= 0) continue;
             uint64_t stream_counter = counter + (uint64_t)(offset / 8);
-
-            cudaMemcpyAsync(d_in + offset, plaintext + offset, chunk_size, cudaMemcpyHostToDevice, streams[s]);
-            encryptCTRKernel<<<blocks, threads, 0, streams[s]>>>(d_in + offset, d_out + offset, chunk_size, d_key, stream_counter);
-            cudaMemcpyAsync((void*)(ciphertext + offset), d_out + offset, chunk_size, cudaMemcpyDeviceToHost, streams[s]);
+            int num_blocks_per_chunk = current_chunk_size / 8;
+            int threads = 256;
+            int blocks  = (num_blocks_per_chunk + threads - 1) / threads;
+            if (blocks == 0) blocks = 1;
+            cudaMemcpyAsync(d_in + offset, h_in + offset, current_chunk_size, cudaMemcpyHostToDevice, streams[s]);
+            encryptCTRKernel<<<blocks, threads, 0, streams[s]>>>(d_in + offset, d_out + offset, current_chunk_size, d_key, stream_counter);
+            cudaMemcpyAsync(h_out + offset, d_out + offset, current_chunk_size, cudaMemcpyDeviceToHost, streams[s]);
         }
         cudaDeviceSynchronize();
 
