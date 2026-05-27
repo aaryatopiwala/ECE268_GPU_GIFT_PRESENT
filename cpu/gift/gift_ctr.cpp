@@ -9,15 +9,15 @@
 static void encrypt_ctr_buffer(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint64_t *key, uint64_t *counter) {
     for (size_t i = 0; i < length; i += 16) {
         // gift is 128 bit plaintext block
-        uint64_t block1 = ((uint64_t)plaintext[i] << 0) | ((uint64_t)plaintext[i+1] << 8) |
-                        ((uint64_t)plaintext[i+2] << 16) | ((uint64_t)plaintext[i+3] << 24) |
-                        ((uint64_t)plaintext[i+4] << 32) | ((uint64_t)plaintext[i+5] << 40) |
-                        ((uint64_t)plaintext[i+6] << 48) | ((uint64_t)plaintext[i+7] << 56);
+        uint64_t block1 = ((uint64_t)plaintext[i] << 56) | ((uint64_t)plaintext[i+1] << 48) |
+                ((uint64_t)plaintext[i+2] << 40) | ((uint64_t)plaintext[i+3] << 32) |
+                ((uint64_t)plaintext[i+4] << 24) | ((uint64_t)plaintext[i+5] << 16) |
+                ((uint64_t)plaintext[i+6] << 8) | ((uint64_t)plaintext[i+7] << 0);
 
-        uint64_t block2 = ((uint64_t)plaintext[i+8] << 0) | ((uint64_t)plaintext[i+9] << 8) |
-                        ((uint64_t)plaintext[i+10] << 16) | ((uint64_t)plaintext[i+11] << 24) |
-                        ((uint64_t)plaintext[i+12] << 32) | ((uint64_t)plaintext[i+13] << 40) |
-                        ((uint64_t)plaintext[i+14] << 48) | ((uint64_t)plaintext[i+15] << 56);
+        uint64_t block2 = ((uint64_t)plaintext[i+8] << 56) | ((uint64_t)plaintext[i+9] << 48) |
+                ((uint64_t)plaintext[i+10] << 40) | ((uint64_t)plaintext[i+11] << 32) |
+                ((uint64_t)plaintext[i+12] << 24) | ((uint64_t)plaintext[i+13] << 16) |
+                ((uint64_t)plaintext[i+14] << 8) | ((uint64_t)plaintext[i+15] << 0);
 
         block1 = counter[0];
         block2 = counter[1];
@@ -29,23 +29,23 @@ static void encrypt_ctr_buffer(const uint8_t *plaintext, uint8_t *ciphertext, si
         //printf("Prev cipher: %016lx %016lx\n", prev_cipher[0], prev_cipher[1]);
         gift128_encrypt(block, key, cipher_block);
 
-        ciphertext[i+0] = ((cipher_block[0] >> 0) & 0xFF)^ plaintext[i];
-        ciphertext[i+1] = ((cipher_block[0] >> 8) & 0xFF)^ plaintext[i+1];
-        ciphertext[i+2] = ((cipher_block[0] >> 16) & 0xFF)^ plaintext[i+2];
-        ciphertext[i+3] = ((cipher_block[0] >> 24) & 0xFF)^ plaintext[i+3];
-        ciphertext[i+4] = ((cipher_block[0] >> 32) & 0xFF)^ plaintext[i+4];
-        ciphertext[i+5] = ((cipher_block[0] >> 40) & 0xFF)^ plaintext[i+5];
-        ciphertext[i+6] = ((cipher_block[0] >> 48) & 0xFF)^ plaintext[i+6];
-        ciphertext[i+7] = ((cipher_block[0] >> 56) & 0xFF)^ plaintext[i+7];
+        ciphertext[i+0] = ((cipher_block[0] >> 56) & 0xFF)^ plaintext[i];
+        ciphertext[i+1] = ((cipher_block[0] >> 48) & 0xFF)^ plaintext[i+1];
+        ciphertext[i+2] = ((cipher_block[0] >> 40) & 0xFF)^ plaintext[i+2];
+        ciphertext[i+3] = ((cipher_block[0] >> 32) & 0xFF)^ plaintext[i+3];
+        ciphertext[i+4] = ((cipher_block[0] >> 24) & 0xFF)^ plaintext[i+4];
+        ciphertext[i+5] = ((cipher_block[0] >> 16) & 0xFF)^ plaintext[i+5];
+        ciphertext[i+6] = ((cipher_block[0] >> 8) & 0xFF)^ plaintext[i+6];
+        ciphertext[i+7] = ((cipher_block[0] >> 0) & 0xFF)^ plaintext[i+7];
 
-        ciphertext[i+8] = ((cipher_block[1] >> 0) & 0xFF)^ plaintext[i+8];
-        ciphertext[i+9] = ((cipher_block[1] >> 8) & 0xFF)^ plaintext[i+9];
-        ciphertext[i+10] = ((cipher_block[1] >> 16) & 0xFF)^ plaintext[i+10];
-        ciphertext[i+11] = ((cipher_block[1] >> 24) & 0xFF)^ plaintext[i+11];
-        ciphertext[i+12] = ((cipher_block[1] >> 32) & 0xFF)^ plaintext[i+12];
-        ciphertext[i+13] = ((cipher_block[1] >> 40) & 0xFF)^ plaintext[i+13];
-        ciphertext[i+14] = ((cipher_block[1] >> 48) & 0xFF)^ plaintext[i+14];
-        ciphertext[i+15] = ((cipher_block[1] >> 56) & 0xFF)^ plaintext[i+15];
+        ciphertext[i+8] = ((cipher_block[1] >> 56) & 0xFF)^ plaintext[i+8];
+        ciphertext[i+9] = ((cipher_block[1] >> 48) & 0xFF)^ plaintext[i+9];
+        ciphertext[i+10] = ((cipher_block[1] >> 40) & 0xFF)^ plaintext[i+10];
+        ciphertext[i+11] = ((cipher_block[1] >> 32) & 0xFF)^ plaintext[i+11];
+        ciphertext[i+12] = ((cipher_block[1] >> 24) & 0xFF)^ plaintext[i+12];
+        ciphertext[i+13] = ((cipher_block[1] >> 16) & 0xFF)^ plaintext[i+13];
+        ciphertext[i+14] = ((cipher_block[1] >> 8) & 0xFF)^ plaintext[i+14];
+        ciphertext[i+15] = ((cipher_block[1] >> 0) & 0xFF)^ plaintext[i+15];
     }
 }
 
@@ -57,10 +57,10 @@ void hex_to_key(const char *hex_str, uint64_t *key) {
     }
     key[0] = 0;
     key[1] = 0;
-    key[0] = ((uint64_t)key_bytes[7] << 56) | ((uint64_t)key_bytes[6] << 48) | ((uint64_t)key_bytes[5] << 40) | ((uint64_t)key_bytes[4] << 32) |
-              ((uint64_t)key_bytes[3] << 24) | ((uint64_t)key_bytes[2] << 16) | ((uint64_t)key_bytes[1] << 8) | (uint64_t)key_bytes[0];
-    key[1] = ((uint64_t)key_bytes[15] << 56) | ((uint64_t)key_bytes[14] << 48) | ((uint64_t)key_bytes[13] << 40) | ((uint64_t)key_bytes[12] << 32) |
-              ((uint64_t)key_bytes[11] << 24) | ((uint64_t)key_bytes[10] << 16) | ((uint64_t)key_bytes[9] << 8) | (uint64_t)key_bytes[8];
+    key[0] = ((uint64_t)key_bytes[7] << 0) | ((uint64_t)key_bytes[6] << 8) | ((uint64_t)key_bytes[5] << 16) | ((uint64_t)key_bytes[4] << 24) |
+              ((uint64_t)key_bytes[3] << 32) | ((uint64_t)key_bytes[2] << 40) | ((uint64_t)key_bytes[1] << 48) | ((uint64_t)key_bytes[0] << 56);
+    key[1] = ((uint64_t)key_bytes[15] << 0) | ((uint64_t)key_bytes[14] << 8) | ((uint64_t)key_bytes[13] << 16) | ((uint64_t)key_bytes[12] << 24) |
+              ((uint64_t)key_bytes[11] << 32) | ((uint64_t)key_bytes[10] << 40) | ((uint64_t)key_bytes[9] << 48) | ((uint64_t)key_bytes[8] << 56);
 }
 
 int main(int argc, char *argv[]) {

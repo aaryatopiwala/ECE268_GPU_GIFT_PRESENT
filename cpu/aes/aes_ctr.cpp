@@ -57,10 +57,10 @@ void hex_to_key(const char *hex_str, uint64_t *key) {
     }
     key[0] = 0;
     key[1] = 0;
-    key[0] = ((uint64_t)key_bytes[7] << 56) | ((uint64_t)key_bytes[6] << 48) | ((uint64_t)key_bytes[5] << 40) | ((uint64_t)key_bytes[4] << 32) |
-              ((uint64_t)key_bytes[3] << 24) | ((uint64_t)key_bytes[2] << 16) | ((uint64_t)key_bytes[1] << 8) | (uint64_t)key_bytes[0];
-    key[1] = ((uint64_t)key_bytes[15] << 56) | ((uint64_t)key_bytes[14] << 48) | ((uint64_t)key_bytes[13] << 40) | ((uint64_t)key_bytes[12] << 32) |
-              ((uint64_t)key_bytes[11] << 24) | ((uint64_t)key_bytes[10] << 16) | ((uint64_t)key_bytes[9] << 8) | (uint64_t)key_bytes[8];
+    key[0] = ((uint64_t)key_bytes[7] << 0) | ((uint64_t)key_bytes[6] << 8) | ((uint64_t)key_bytes[5] << 16) | ((uint64_t)key_bytes[4] << 24) |
+              ((uint64_t)key_bytes[3] << 32) | ((uint64_t)key_bytes[2] << 40) | ((uint64_t)key_bytes[1] << 48) | ((uint64_t)key_bytes[0] << 56);
+    key[1] = ((uint64_t)key_bytes[15] << 0) | ((uint64_t)key_bytes[14] << 8) | ((uint64_t)key_bytes[13] << 16) | ((uint64_t)key_bytes[12] << 24) |
+              ((uint64_t)key_bytes[11] << 32) | ((uint64_t)key_bytes[10] << 40) | ((uint64_t)key_bytes[9] << 48) | ((uint64_t)key_bytes[8] << 56);
 }
 
 int main(int argc, char *argv[]) {
