@@ -51,7 +51,7 @@ __global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext,
                                          ((uint64_t)ciphertext[i-4] << 24) | ((uint64_t)ciphertext[i-3] << 16) |
                                          ((uint64_t)ciphertext[i-2] << 8)  | ((uint64_t)ciphertext[i-1]));
         
-        uint64_t final_plaintext = decrypted_block ^ prev;
+        uint64_t final_plaintext = block ^ prev;
 
         plaintext[i]   = (uint8_t)(final_plaintext >> 56);
         plaintext[i+1] = (uint8_t)(final_plaintext >> 48);
