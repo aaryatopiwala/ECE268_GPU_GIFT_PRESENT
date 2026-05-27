@@ -7,6 +7,8 @@ RUNS_DIR="$REPO_DIR/../runs"
 
 SUPPORTED_CIPHERS=(present gift aes)
 SUPPORTED_MODES=(ctr cbc)
+
+declare -A DEFAULT_KEY_IV
 DEFAULT_KEY_IV=(
     ["beemovie.txt"]="00000000000000000000:0"
     ["moderntimes.mp4"]="00000000000000000000:0"
@@ -93,11 +95,14 @@ should_test_mode() {
 time_command() {
     local start_ns end_ns status
     start_ns=$(date +%s%N)
-    "$@"
+    
+    set +e 
+    "$@" >/dev/null 2>&1
     status=$?
+    set -e
+    
     end_ns=$(date +%s%N)
     printf "%s %s" "$status" "$(( (end_ns - start_ns) / 1000000 ))"
-    return $status
 }
 
 run_test() {
@@ -140,10 +145,17 @@ run_test() {
         local encrypted_file="$output_dir/${test_name}.enc"
         local decrypted_file="$output_dir/${test_name}.dec"
 
+        # Safely pass --nopad if mode is CTR
+        local mode_arg=""
+        if [ "$mode" = "ctr" ]; then
+            mode_arg="--nopad"
+        fi
+
         local encrypt_result
-        encrypt_result=$(time_command "$binary_path" -e "$TESTS_DIR/$plaintext_file" "$key" "$iv" "$encrypted_file" $( [ "$mode" = "ctr" ] && printf -- '--nopad' ) >/dev/null 2>&1 || true)
+        encrypt_result=$(time_command "$binary_path" -e "$TESTS_DIR/$plaintext_file" "$key" "$iv" "$encrypted_file" ${mode_arg:+"$mode_arg"})
         local encrypt_status=${encrypt_result%% *}
         local encrypt_time=${encrypt_result#* }
+        
         if [ "$encrypt_status" -ne 0 ]; then
             echo "  $plaintext_file encrypt FAILED"
             printf "%s: FAIL (encrypt failed)\n" "$test_name" >> "$results_file"
@@ -152,9 +164,10 @@ run_test() {
         echo "  $plaintext_file encrypt OK (${encrypt_time}ms)"
 
         local decrypt_result
-        decrypt_result=$(time_command "$binary_path" -d "$encrypted_file" "$key" "$iv" "$decrypted_file" $( [ "$mode" = "ctr" ] && printf -- '--nopad' ) >/dev/null 2>&1 || true)
+        decrypt_result=$(time_command "$binary_path" -d "$encrypted_file" "$key" "$iv" "$decrypted_file" ${mode_arg:+"$mode_arg"})
         local decrypt_status=${decrypt_result%% *}
         local decrypt_time=${decrypt_result#* }
+        
         if [ "$decrypt_status" -ne 0 ]; then
             echo "  $plaintext_file decrypt FAILED"
             printf "%s: FAIL (decrypt failed)\n" "$test_name" >> "$results_file"

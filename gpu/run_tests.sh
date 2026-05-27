@@ -8,6 +8,8 @@ BUILD_DIR="$REPO_DIR/build"
 
 SUPPORTED_CIPHERS=(present gift aes)
 SUPPORTED_MODES=(ctr cbc)
+
+declare -A DEFAULT_KEY_IV
 DEFAULT_KEY_IV=(
     ["beemovie.txt"]="00000000000000000000:0"
     ["moderntimes.mp4"]="00000000000000000000:0"
@@ -114,13 +116,15 @@ build_target() {
 }
 
 time_command() {
-    local start_ns end_ns
+    local start_ns end_ns status
     start_ns=$(date +%s%N)
-    "$@"
-    local status=$?
+    
+    "$@" >/dev/null 2>&1
+    status=$?
+    set -e
+    
     end_ns=$(date +%s%N)
     printf "%s %s" "$status" "$(( (end_ns - start_ns) / 1000000 ))"
-    return $status
 }
 
 run_test() {
@@ -171,9 +175,9 @@ run_test() {
 
         local encrypt_result
         if [ "$run_mode" = "profile" ]; then
-            encrypt_result=$(time_command nsys profile --output="$BUILD_DIR/${target}_profile" --stats=true --force-overwrite=true "${cmd[@]}" >/dev/null 2>&1 || true)
+            encrypt_result=$(time_command nsys profile --output="$BUILD_DIR/${target}_profile" --stats=true --force-overwrite=true "${cmd[@]}")
         else
-            encrypt_result=$(time_command "${cmd[@]}" >/dev/null 2>&1 || true)
+            encrypt_result=$(time_command "${cmd[@]}")
         fi
         local encrypt_status=${encrypt_result%% *}
         local encrypt_time=${encrypt_result#* }
@@ -191,9 +195,9 @@ run_test() {
 
         local decrypt_result
         if [ "$run_mode" = "profile" ]; then
-            decrypt_result=$(time_command nsys profile --output="$BUILD_DIR/${target}_profile" --stats=true --force-overwrite=true "${cmd[@]}" >/dev/null 2>&1 || true)
+            decrypt_result=$(time_command nsys profile --output="$BUILD_DIR/${target}_profile" --stats=true --force-overwrite=true "${cmd[@]}")
         else
-            decrypt_result=$(time_command "${cmd[@]}" >/dev/null 2>&1 || true)
+            decrypt_result=$(time_command "${cmd[@]}")
         fi
         local decrypt_status=${decrypt_result%% *}
         local decrypt_time=${decrypt_result#* }
