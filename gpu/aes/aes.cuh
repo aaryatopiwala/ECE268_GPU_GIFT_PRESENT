@@ -113,7 +113,7 @@ __device__ uint8_t gf_mul(uint8_t a, uint8_t b) {
     return result;
 }
 
-__device__void addRoundKey(uint8_t state[4][4], uint32_t roundKey[4], uint8_t newState[4][4]) {
+__device__ void addRoundKey(uint8_t state[4][4], uint32_t roundKey[4], uint8_t newState[4][4]) {
     for (int c = 0; c < 4; c++) {
         //printf("Adding round key %08x for column %d:\n", roundKey[c], c);
         for (int r = 0; r < 4; r++) {

@@ -9,7 +9,7 @@
 #define BUFFER_SIZE (8 * 1024 * 1024)
 #define NUM_STREAMS 4
 
-static void encryptCTRKernel(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint64_t *key, uint64_t *counter) {
+__global__ void encryptCTRKernel(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint64_t *key, uint64_t *counter) {
     size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
     for (size_t i = tid * 16; i < length; i += stride * 16) {
@@ -134,7 +134,7 @@ int main(int argc, char *argv[]) {
         uint64_t counter1 = 0;
         while (total_processed < total_size) {
             size_t to_read = (total_size - total_processed > BUFFER_SIZE) ? BUFFER_SIZE : (total_size - total_processed);
-            size_t bytes_read = fread(plaintext, 1, to_read, input_file);
+            size_t bytes_read = fread(h_in, 1, to_read, input_file);
             if (bytes_read == 0) break;
 
             size_t process_size = bytes_read;
@@ -142,7 +142,7 @@ int main(int argc, char *argv[]) {
 
             if (is_last && !no_pad) {
                 size_t pad_len = 16 - (bytes_read % 16);
-                memset(plaintext + bytes_read, pad_len, pad_len);
+                memset(h_in + bytes_read, pad_len, pad_len);
                 process_size = bytes_read + pad_len;
             }
 
@@ -152,7 +152,9 @@ int main(int argc, char *argv[]) {
                 int offset = s * chunk_size;
                 int current_chunk_size = (s == NUM_STREAMS - 1) ? (process_size - offset) : chunk_size;
                 if (current_chunk_size <= 0) continue;
-                uint64_t stream_counter = counter + (uint64_t)(offset / 8);
+                uint64_t stream_counter[2];
+                stream_counter[0] = counter[0] + (uint64_t)((offset / 8) / 2);
+                stream_counter[1] = counter[1];
                 int num_blocks_per_chunk = current_chunk_size / 8;
                 int threads = 256;
                 int blocks  = (num_blocks_per_chunk + threads - 1) / threads;
@@ -179,9 +181,10 @@ int main(int argc, char *argv[]) {
         uint64_t counter1 = 0;
         while (total_processed < total_size) {
             size_t to_read = (total_size - total_processed > BUFFER_SIZE) ? BUFFER_SIZE : (total_size - total_processed);
-            size_t bytes_read = fread(ciphertext, 1, to_read, input_file);
+            size_t bytes_read = fread(h_in, 1, to_read, input_file);
             if (bytes_read == 0) break;
 
+            size_t process_size = bytes_read;
             bool is_last = (total_processed + bytes_read >= total_size);
             uint64_t counter[2] = {counter0, counter1};
             int chunk_size = (int)(process_size / NUM_STREAMS) & ~7;
@@ -189,7 +192,9 @@ int main(int argc, char *argv[]) {
                 int offset = s * chunk_size;
                 int current_chunk_size = (s == NUM_STREAMS - 1) ? (process_size - offset) : chunk_size;
                 if (current_chunk_size <= 0) continue;
-                uint64_t stream_counter = counter + (uint64_t)(offset / 8);
+                uint64_t stream_counter[2];
+                stream_counter[0] = counter[0] + (uint64_t)((offset / 8) / 2);
+                stream_counter[1] = counter[1];
                 int num_blocks_per_chunk = current_chunk_size / 8;
                 int threads = 256;
                 int blocks  = (num_blocks_per_chunk + threads - 1) / threads;
@@ -202,7 +207,7 @@ int main(int argc, char *argv[]) {
             size_t write_size = process_size;
 
             if (is_last && !no_pad) {
-                uint8_t pad_len = plaintext[bytes_read - 1];
+                uint8_t pad_len = h_out[bytes_read - 1];
                 if (pad_len > 0 && pad_len <= 16) {
                     write_size = bytes_read - pad_len;
                 } else if (pad_len == 0) {
