@@ -3,11 +3,23 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNS_DIR="$REPO_DIR/runs"
+EXTRA_ARGS=""
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --profile) EXTRA_ARGS="--profile"; shift ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
 
 echo "=========================================="
 echo "Running Cipher Tests"
 echo "=========================================="
 echo "Results stored in: $RUNS_DIR/"
+if [ -n "$EXTRA_ARGS" ]; then
+    echo "Options: $EXTRA_ARGS"
+fi
 echo ""
 
 # Define which ciphers and modes to test
@@ -52,7 +64,7 @@ for test in "${TESTS[@]}"; do
     echo "Running ${platform^^} $cipher $mode tests"
     echo "=========================================="
     
-    bash "$test_script"
+    bash "$test_script" $EXTRA_ARGS
 done
 
 echo ""

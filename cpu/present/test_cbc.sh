@@ -30,19 +30,33 @@ get_plaintext_files() {
     done
 }
 
+# Function to measure elapsed time in milliseconds
+measure_time() {
+    local start_ns=$(date +%s%N)
+    "$@"
+    local end_ns=$(date +%s%N)
+    local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+    echo "$elapsed_ms"
+}
+
 echo "Testing CPU $CIPHER $MODE mode..."
 
 plaintext_files=$(get_plaintext_files)
+output_dir="$RUNS_DIR/cpu/$CIPHER/$MODE"
+mkdir -p "$output_dir"
+
+# Initialize results file
+results_file="$output_dir/results.txt"
+echo "CPU $CIPHER $MODE Results" > "$results_file"
+echo "=========================" >> "$results_file"
+echo "Timestamp: $(date)" >> "$results_file"
+echo "" >> "$results_file"
 
 for plaintext_file in $plaintext_files; do
     plaintext_path="$TESTS_DIR/$plaintext_file"
     
     # Get keys and IVs from TEST_VECTORS
     key_iv_pairs="${TEST_VECTORS[$plaintext_file]:-00000000000000000000:0}"
-    
-    # Create output directory
-    output_dir="$RUNS_DIR/cpu/$CIPHER/$MODE"
-    mkdir -p "$output_dir"
     
     while IFS=: read -r key iv; do
         test_name="${plaintext_file}_key_${key:0:4}_${key: -4}"
@@ -51,29 +65,33 @@ for plaintext_file in $plaintext_files; do
         
         # Encrypt
         echo -n "  Encrypting $plaintext_file (key: ${key:0:8}..., iv: $iv)... "
-        if "$CPU_CIPHER_DIR/${CIPHER}_${MODE}" -e "$plaintext_path" "$key" "$iv" "$encrypted_file" 2>/dev/null; then
-            echo "OK"
-        else
+        encrypt_time=$(measure_time "$CPU_CIPHER_DIR/${CIPHER}_${MODE}" -e "$plaintext_path" "$key" "$iv" "$encrypted_file" 2>/dev/null) || {
             echo "FAILED"
+            echo "$test_name (encrypt): FAILED" >> "$results_file"
             continue
-        fi
+        }
+        echo "OK (${encrypt_time}ms)"
         
         # Decrypt
         echo -n "  Decrypting encrypted $plaintext_file... "
-        if "$CPU_CIPHER_DIR/${CIPHER}_${MODE}" -d "$encrypted_file" "$key" "$iv" "$decrypted_file" 2>/dev/null; then
-            echo "OK"
-        else
+        decrypt_time=$(measure_time "$CPU_CIPHER_DIR/${CIPHER}_${MODE}" -d "$encrypted_file" "$key" "$iv" "$decrypted_file" 2>/dev/null) || {
             echo "FAILED"
+            echo "$test_name (decrypt): FAILED" >> "$results_file"
             continue
-        fi
+        }
+        echo "OK (${decrypt_time}ms)"
         
         # Verify decrypted matches original
         echo -n "  Verifying decrypted matches original... "
         if cmp -s "$decrypted_file" "$plaintext_path"; then
             echo "PASS"
+            echo "$test_name: PASS (encrypt: ${encrypt_time}ms, decrypt: ${decrypt_time}ms)" >> "$results_file"
         else
             echo "FAIL"
-            echo "    File size mismatch: original=$(stat -f%z "$plaintext_path") decrypted=$(stat -f%z "$decrypted_file")"
+            echo "$test_name: FAIL (size mismatch)" >> "$results_file"
         fi
     done <<< "$key_iv_pairs"
 done
+
+echo "" >> "$results_file"
+echo "Test completed at $(date)" >> "$results_file"
