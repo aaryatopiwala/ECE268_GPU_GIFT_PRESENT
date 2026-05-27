@@ -45,22 +45,22 @@ __global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext,
 
         uint64_t block;
         present80_decrypt(&cipher_block, key, &block);
-        
+
         uint64_t prev = (i == 0) ? iv : (((uint64_t)ciphertext[i-8] << 56) | ((uint64_t)ciphertext[i-7] << 48) |
                                          ((uint64_t)ciphertext[i-6] << 40) | ((uint64_t)ciphertext[i-5] << 32) |
                                          ((uint64_t)ciphertext[i-4] << 24) | ((uint64_t)ciphertext[i-3] << 16) |
                                          ((uint64_t)ciphertext[i-2] << 8)  | ((uint64_t)ciphertext[i-1]));
         
-        block ^= prev;
+        uint64_t final_plaintext = decrypted_block ^ prev;
 
-        plaintext[i] = (uint8_t)((block ^ *prev_cipher) >> 56);
-        plaintext[i+1] = (uint8_t)((block ^ *prev_cipher) >> 48);
-        plaintext[i+2] = (uint8_t)((block ^ *prev_cipher) >> 40);
-        plaintext[i+3] = (uint8_t)((block ^ *prev_cipher) >> 32);
-        plaintext[i+4] = (uint8_t)((block ^ *prev_cipher) >> 24);
-        plaintext[i+5] = (uint8_t)((block ^ *prev_cipher) >> 16);
-        plaintext[i+6] = (uint8_t)((block ^ *prev_cipher) >> 8);
-        plaintext[i+7] = (uint8_t)((block ^ *prev_cipher) >> 0);
+        plaintext[i]   = (uint8_t)(final_plaintext >> 56);
+        plaintext[i+1] = (uint8_t)(final_plaintext >> 48);
+        plaintext[i+2] = (uint8_t)(final_plaintext >> 40);
+        plaintext[i+3] = (uint8_t)(final_plaintext >> 32);
+        plaintext[i+4] = (uint8_t)(final_plaintext >> 24);
+        plaintext[i+5] = (uint8_t)(final_plaintext >> 16);
+        plaintext[i+6] = (uint8_t)(final_plaintext >> 8);
+        plaintext[i+7] = (uint8_t)(final_plaintext >> 0);
     }
 }
 
