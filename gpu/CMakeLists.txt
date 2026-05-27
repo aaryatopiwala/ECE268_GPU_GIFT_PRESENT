@@ -42,3 +42,6 @@ add_cipher_target(present_ctr present_ctr.cu present)
 
 add_cipher_target(gift_cbc gift_cbc.cu gift)
 add_cipher_target(gift_ctr gift_ctr.cu gift)
+
+add_cipher_target(aes_cbc aes_cbc.cu aes)
+add_cipher_target(aes_ctr aes_ctr.cu aes)
