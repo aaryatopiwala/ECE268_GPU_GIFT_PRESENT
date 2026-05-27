@@ -96,6 +96,7 @@ time_command() {
     local start_ns end_ns status
     start_ns=$(date +%s%N)
     
+    # Temporarily disable error stopping to catch the exact exit code, then re-enable
     set +e 
     "$@" >/dev/null 2>&1
     status=$?
@@ -121,6 +122,9 @@ run_test() {
         return 1
     fi
 
+    # Ensure binary is executable
+    chmod +x "$binary_path"
+
     local output_dir="$RUNS_DIR/cpu/$cipher/$mode"
     mkdir -p "$output_dir"
     local results_file="$output_dir/results.txt"
@@ -145,14 +149,14 @@ run_test() {
         local encrypted_file="$output_dir/${test_name}.enc"
         local decrypted_file="$output_dir/${test_name}.dec"
 
-        # Safely pass --nopad if mode is CTR
-        local mode_arg=""
+        # Dynamically build the execution array to prevent empty argument parsing bugs
+        local cmd=("$binary_path" "-e" "$plaintext_path" "$key" "$iv" "$encrypted_file")
         if [ "$mode" = "ctr" ]; then
-            mode_arg="--nopad"
+            cmd+=("--nopad")
         fi
 
         local encrypt_result
-        encrypt_result=$(time_command "$binary_path" -e "$TESTS_DIR/$plaintext_file" "$key" "$iv" "$encrypted_file" ${mode_arg:+"$mode_arg"})
+        encrypt_result=$(time_command "${cmd[@]}")
         local encrypt_status=${encrypt_result%% *}
         local encrypt_time=${encrypt_result#* }
         
@@ -163,8 +167,14 @@ run_test() {
         fi
         echo "  $plaintext_file encrypt OK (${encrypt_time}ms)"
 
+        # Re-build the array for decryption
+        local cmd_dec=("$binary_path" "-d" "$encrypted_file" "$key" "$iv" "$decrypted_file")
+        if [ "$mode" = "ctr" ]; then
+            cmd_dec+=("--nopad")
+        fi
+
         local decrypt_result
-        decrypt_result=$(time_command "$binary_path" -d "$encrypted_file" "$key" "$iv" "$decrypted_file" ${mode_arg:+"$mode_arg"})
+        decrypt_result=$(time_command "${cmd_dec[@]}")
         local decrypt_status=${decrypt_result%% *}
         local decrypt_time=${decrypt_result#* }
         
@@ -175,7 +185,7 @@ run_test() {
         fi
         echo "  $plaintext_file decrypt OK (${decrypt_time}ms)"
 
-        if cmp -s "$decrypted_file" "$TESTS_DIR/$plaintext_file"; then
+        if cmp -s "$decrypted_file" "$plaintext_path"; then
             echo "  $plaintext_file verify PASS"
             printf "%s: PASS (encrypt: %sms, decrypt: %sms)\n" "$test_name" "$encrypt_time" "$decrypt_time" >> "$results_file"
         else
