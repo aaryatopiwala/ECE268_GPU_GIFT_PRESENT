@@ -12,56 +12,65 @@ __global__ void encryptCBCKernel(const uint8_t* plaintext, uint8_t* ciphertext,
                                  size_t length, const uint64_t* key, uint64_t iv) {
     uint64_t prev = iv;
     for (size_t i = 0; i < length; i += 8) {
-        uint64_t block = ((uint64_t)plaintext[i] << 56) | ((uint64_t)plaintext[i+1] << 48) |
+        uint64_t block = ((uint64_t)plaintext[i]   << 56) | ((uint64_t)plaintext[i+1] << 48) |
                          ((uint64_t)plaintext[i+2] << 40) | ((uint64_t)plaintext[i+3] << 32) |
                          ((uint64_t)plaintext[i+4] << 24) | ((uint64_t)plaintext[i+5] << 16) |
-                         ((uint64_t)plaintext[i+6] << 8)  | ((uint64_t)plaintext[i+7]);
+                         ((uint64_t)plaintext[i+6] <<  8) | ((uint64_t)plaintext[i+7]);
         block ^= prev;
         uint64_t cipher_block;
         present80_encrypt(&block, key, &cipher_block);
 
-        ciphertext[i] = (cipher_block >> 56) & 0xFF;
+        ciphertext[i]   = (cipher_block >> 56) & 0xFF;
         ciphertext[i+1] = (cipher_block >> 48) & 0xFF;
         ciphertext[i+2] = (cipher_block >> 40) & 0xFF;
         ciphertext[i+3] = (cipher_block >> 32) & 0xFF;
         ciphertext[i+4] = (cipher_block >> 24) & 0xFF;
         ciphertext[i+5] = (cipher_block >> 16) & 0xFF;
-        ciphertext[i+6] = (cipher_block >> 8) & 0xFF;
-        ciphertext[i+7] = (cipher_block >> 0) & 0xFF;
-        
+        ciphertext[i+6] = (cipher_block >>  8) & 0xFF;
+        ciphertext[i+7] = (cipher_block >>  0) & 0xFF;
+
         prev = cipher_block;
     }
 }
 
 __global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext, 
                                  size_t length, const uint64_t* key, uint64_t iv) {
-    size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t tid    = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
     for (size_t i = tid * 8; i < length; i += stride * 8) {
-        uint64_t cipher_block = ((uint64_t)ciphertext[i] << 56) | ((uint64_t)ciphertext[i+1] << 48) |
+        uint64_t cipher_block = ((uint64_t)ciphertext[i]   << 56) | ((uint64_t)ciphertext[i+1] << 48) |
                                 ((uint64_t)ciphertext[i+2] << 40) | ((uint64_t)ciphertext[i+3] << 32) |
                                 ((uint64_t)ciphertext[i+4] << 24) | ((uint64_t)ciphertext[i+5] << 16) |
-                                ((uint64_t)ciphertext[i+6] << 8)  | ((uint64_t)ciphertext[i+7]);
+                                ((uint64_t)ciphertext[i+6] <<  8) | ((uint64_t)ciphertext[i+7]);
 
         uint64_t block;
         present80_decrypt(&cipher_block, key, &block);
+        uint64_t prev = (i == 0) ? iv
+                                 : (((uint64_t)ciphertext[i-8] << 56) | ((uint64_t)ciphertext[i-7] << 48) |
+                                    ((uint64_t)ciphertext[i-6] << 40) | ((uint64_t)ciphertext[i-5] << 32) |
+                                    ((uint64_t)ciphertext[i-4] << 24) | ((uint64_t)ciphertext[i-3] << 16) |
+                                    ((uint64_t)ciphertext[i-2] <<  8) | ((uint64_t)ciphertext[i-1]));
 
-        uint64_t prev = (i == 0) ? iv : (((uint64_t)ciphertext[i-8] << 56) | ((uint64_t)ciphertext[i-7] << 48) |
-                                         ((uint64_t)ciphertext[i-6] << 40) | ((uint64_t)ciphertext[i-5] << 32) |
-                                         ((uint64_t)ciphertext[i-4] << 24) | ((uint64_t)ciphertext[i-3] << 16) |
-                                         ((uint64_t)ciphertext[i-2] << 8)  | ((uint64_t)ciphertext[i-1]));
-        
-        uint64_t final_plaintext = block ^ prev;
+        uint64_t pt = block ^ prev;
 
-        plaintext[i]   = (uint8_t)(final_plaintext >> 56);
-        plaintext[i+1] = (uint8_t)(final_plaintext >> 48);
-        plaintext[i+2] = (uint8_t)(final_plaintext >> 40);
-        plaintext[i+3] = (uint8_t)(final_plaintext >> 32);
-        plaintext[i+4] = (uint8_t)(final_plaintext >> 24);
-        plaintext[i+5] = (uint8_t)(final_plaintext >> 16);
-        plaintext[i+6] = (uint8_t)(final_plaintext >> 8);
-        plaintext[i+7] = (uint8_t)(final_plaintext >> 0);
+        plaintext[i]   = (uint8_t)(pt >> 56);
+        plaintext[i+1] = (uint8_t)(pt >> 48);
+        plaintext[i+2] = (uint8_t)(pt >> 40);
+        plaintext[i+3] = (uint8_t)(pt >> 32);
+        plaintext[i+4] = (uint8_t)(pt >> 24);
+        plaintext[i+5] = (uint8_t)(pt >> 16);
+        plaintext[i+6] = (uint8_t)(pt >>  8);
+        plaintext[i+7] = (uint8_t)(pt >>  0);
     }
+}
+
+// Decode the last 8 bytes of buf as a big-endian uint64_t
+static uint64_t last_block_as_u64(const uint8_t* buf, size_t len) {
+    size_t base = len - 8;
+    return ((uint64_t)buf[base]   << 56) | ((uint64_t)buf[base+1] << 48) |
+           ((uint64_t)buf[base+2] << 40) | ((uint64_t)buf[base+3] << 32) |
+           ((uint64_t)buf[base+4] << 24) | ((uint64_t)buf[base+5] << 16) |
+           ((uint64_t)buf[base+6] <<  8) | ((uint64_t)buf[base+7]);
 }
 
 static void hex_to_key(const char* hex_str, uint64_t* key) {
@@ -87,10 +96,7 @@ int main(int argc, char* argv[]) {
     gpuSelectBestDevice();
 
     FILE* input_file = fopen(argv[2], "rb");
-    if (!input_file) { 
-        perror("Failed to open input file"); 
-        return 1; 
-    }
+    if (!input_file) { perror("Failed to open input file"); return 1; }
     fseek(input_file, 0, SEEK_END);
     size_t total_size = ftell(input_file);
     fseek(input_file, 0, SEEK_SET);
@@ -100,11 +106,7 @@ int main(int argc, char* argv[]) {
     uint64_t iv = (uint64_t)strtoull(argv[4], nullptr, 16);
 
     FILE* output_file = fopen(argv[5], "wb");
-    if (!output_file) { 
-        perror("Failed to open output file"); 
-        fclose(input_file); 
-        return 1; 
-    }
+    if (!output_file) { perror("Failed to open output file"); fclose(input_file); return 1; }
 
     // Pinned host buffers
     uint8_t* h_in;
@@ -132,7 +134,7 @@ int main(int argc, char* argv[]) {
         uint64_t prev_cipher = iv;
         size_t total_processed = 0;
 
-        // Encrypt is sequential
+        // Encrypt is inherently sequential (each block depends on the previous ciphertext)
         while (total_processed < total_size) {
             size_t to_read    = (total_size - total_processed > BUFFER_SIZE) ? BUFFER_SIZE : (total_size - total_processed);
             size_t bytes_read = fread(h_in, 1, to_read, input_file);
@@ -148,11 +150,11 @@ int main(int argc, char* argv[]) {
             }
 
             cudaMemcpyAsync(d_in, h_in, process_size, cudaMemcpyHostToDevice, streams[0]);
-            encryptCBCKernel<<<1, 1, 0, streams[0]>>>(d_in, d_out, (int)process_size, d_key, prev_cipher);
+            encryptCBCKernel<<<1, 1, 0, streams[0]>>>(d_in, d_out, process_size, d_key, prev_cipher);
             cudaMemcpyAsync(h_out, d_out, process_size, cudaMemcpyDeviceToHost, streams[0]);
             cudaStreamSynchronize(streams[0]);
 
-            prev_cipher = *(uint64_t*)(h_out + process_size - 8);
+            prev_cipher = last_block_as_u64(h_out, process_size);
             fwrite(h_out, 1, process_size, output_file);
             total_processed += bytes_read;
         }
@@ -161,31 +163,36 @@ int main(int argc, char* argv[]) {
         uint64_t prev_cipher = iv;
         size_t total_processed = 0;
 
-        // Decrypt is parallel
+        // Decrypt can be parallelised across blocks (CBC decrypt is independent per block)
         while (total_processed < total_size) {
             size_t to_read    = (total_size - total_processed > BUFFER_SIZE) ? BUFFER_SIZE : (total_size - total_processed);
             size_t bytes_read = fread(h_in, 1, to_read, input_file);
             if (bytes_read == 0) break;
 
             bool is_last = (total_processed + bytes_read >= total_size);
-
-            int chunk_size  = (int)(bytes_read / NUM_STREAMS) & ~7; // align to 8 bytes
-            int num_blocks_per_chunk = chunk_size / 8;
-            int threads = 256;
-            int blocks  = (num_blocks_per_chunk + threads - 1) / threads;
+            size_t base_chunk  = (bytes_read / NUM_STREAMS) & ~(size_t)7; // 8-byte aligned
+            int    threads     = 256;
 
             for (int s = 0; s < NUM_STREAMS; s++) {
-                int offset       = s * chunk_size;
-                uint64_t chunk_iv = (s == 0) ? prev_cipher
-                                              : *(uint64_t*)(h_in + offset - 8);
-                cudaMemcpyAsync(d_in + offset, h_in + offset, chunk_size, cudaMemcpyHostToDevice, streams[s]);
-                decryptCBCKernel<<<blocks, threads, 0, streams[s]>>>(d_in + offset, d_out + offset, chunk_size, d_key, chunk_iv);
+                size_t offset      = (size_t)s * base_chunk;
+                // Last stream takes everything that is left so no bytes are lost
+                size_t chunk_size  = (s == NUM_STREAMS - 1) ? (bytes_read - offset) : base_chunk;
+                if (chunk_size == 0) continue;
+                uint64_t chunk_iv = (offset == 0)
+                    ? prev_cipher
+                    : last_block_as_u64(h_in, offset); // last 8 bytes before this chunk
+
+                int num_blocks = (int)(chunk_size / 8);
+                int blocks     = (num_blocks + threads - 1) / threads;
+
+                cudaMemcpyAsync(d_in  + offset, h_in + offset, chunk_size, cudaMemcpyHostToDevice, streams[s]);
+                decryptCBCKernel<<<blocks, threads, 0, streams[s]>>>(
+                    d_in + offset, d_out + offset, chunk_size, d_key, chunk_iv);
                 cudaMemcpyAsync(h_out + offset, d_out + offset, chunk_size, cudaMemcpyDeviceToHost, streams[s]);
             }
             cudaDeviceSynchronize();
 
-            prev_cipher = *(uint64_t*)(h_in + bytes_read - 8);
-
+            prev_cipher = last_block_as_u64(h_in, bytes_read);
             size_t write_size = bytes_read;
             if (is_last && !no_pad) {
                 uint8_t pad_len = h_out[bytes_read - 1];
@@ -201,18 +208,18 @@ int main(int argc, char* argv[]) {
 
     } else {
         fprintf(stderr, "Invalid option: %s\n", argv[1]);
-        fclose(input_file); 
-        fclose(output_file); 
+        fclose(input_file);
+        fclose(output_file);
         return 1;
     }
 
     fprintf(stdout, "[timer] total: %ld ms\n", t.stopMs());
 
     for (int i = 0; i < NUM_STREAMS; i++) cudaStreamDestroy(streams[i]);
-    cudaFree(d_in); 
-    cudaFree(d_out); 
+    cudaFree(d_in);
+    cudaFree(d_out);
     cudaFree(d_key);
-    cudaFreeHost(h_in); 
+    cudaFreeHost(h_in);
     cudaFreeHost(h_out);
     fclose(input_file);
     fclose(output_file);
