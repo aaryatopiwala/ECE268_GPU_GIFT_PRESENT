@@ -12,7 +12,7 @@ __global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext, 
     size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
     for (size_t i = tid * 8; i < length; i += stride * 8) {
-        uint64_t block = *counter;
+        uint64_t block = counter + (i / 8);
         uint64_t cipher_block;
         present80_encrypt(&block, key, &cipher_block);
 
