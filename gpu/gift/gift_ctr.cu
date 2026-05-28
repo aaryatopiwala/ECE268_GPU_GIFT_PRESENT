@@ -49,7 +49,7 @@ __global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext, 
     ctr.lo = counter.lo + (uint64_t)block_idx;
     ctr.hi = counter.hi + (ctr.lo < counter.lo ? 1ull : 0ull);
 
-    Gift128Block ks = gift128_encrypt_warp_bitslice(ctr, local_key, mask);
+    Gift128Block ks = gift128_encrypt_bl(ctr, local_key, mask);
 
     if (active)
         store_xor_be128(ciphertext + byte_idx, plaintext + byte_idx, ks);

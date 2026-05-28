@@ -11,20 +11,54 @@ struct Gift128Block {
     uint64_t hi;
 };
 
-__device__ __forceinline__ uint16_t rotr16(uint16_t x, int r) {
+#include "gift128_t_tables.cuh"
+
+__host__ __device__ __forceinline__ uint16_t rotr16(uint16_t x, int r) {
     return (uint16_t)((x >> r) | (x << (16 - r)));
+}
+
+__device__ __forceinline__ uint64_t gift_load_be64(const uint8_t* p) {
+    return ((uint64_t)p[0] << 56) |
+           ((uint64_t)p[1] << 48) |
+           ((uint64_t)p[2] << 40) |
+           ((uint64_t)p[3] << 32) |
+           ((uint64_t)p[4] << 24) |
+           ((uint64_t)p[5] << 16) |
+           ((uint64_t)p[6] <<  8) |
+           ((uint64_t)p[7] <<  0);
+}
+
+__device__ __forceinline__ void gift_store_be64(uint8_t* p, uint64_t x) {
+    p[0] = (uint8_t)(x >> 56);
+    p[1] = (uint8_t)(x >> 48);
+    p[2] = (uint8_t)(x >> 40);
+    p[3] = (uint8_t)(x >> 32);
+    p[4] = (uint8_t)(x >> 24);
+    p[5] = (uint8_t)(x >> 16);
+    p[6] = (uint8_t)(x >>  8);
+    p[7] = (uint8_t)(x >>  0);
+}
+
+__device__ __forceinline__ Gift128Block gift_load_block(const uint8_t* p) {
+    Gift128Block x;
+    x.hi = gift_load_be64(p);
+    x.lo = gift_load_be64(p + 8);
+    return x;
+}
+
+__device__ __forceinline__ void gift_store_block(uint8_t* p, Gift128Block x) {
+    gift_store_be64(p, x.hi);
+    gift_store_be64(p + 8, x.lo);
 }
 
 __device__ __forceinline__ int gift128_perm_index(int i) {
     int imod16 = i & 15;
     int imod4  = i & 3;
 
-    return 4 * (i >> 4)
-         + 32 * ((3 * (imod16 >> 2) + imod4) & 3)
-         + imod4;
+    return 4 * (i >> 4) + 32 * ((3 * (imod16 >> 2) + imod4) & 3) + imod4;
 }
 
-__device__ __forceinline__ uint8_t gift_sbox(uint8_t x) {
+__host__ __device__ __forceinline__ uint8_t gift_sbox(uint8_t x) {
     const uint8_t s[16] = {
         0x1, 0xa, 0x4, 0xc,
         0x6, 0xf, 0x3, 0x9,
@@ -46,18 +80,12 @@ __device__ __forceinline__ uint8_t gift_inv_sbox(uint8_t x) {
     return inv[x & 0xf];
 }
 
-__device__ __forceinline__ void gift128_round_keys(
-    const uint16_t key[8],
-    uint32_t U[GIFT128_ROUNDS],
-    uint32_t V[GIFT128_ROUNDS],
-    uint8_t RC[GIFT128_ROUNDS]
-) {
+__device__ __forceinline__ void gift128_round_keys(const uint16_t key[8], uint32_t U[GIFT128_ROUNDS], uint32_t V[GIFT128_ROUNDS], uint8_t RC[GIFT128_ROUNDS]) {
     uint16_t k[8];
 
     #pragma unroll
     for (int i = 0; i < 8; i++)
         k[i] = key[i];
-
     uint8_t c = 0;
 
     #pragma unroll
@@ -90,11 +118,7 @@ __device__ __forceinline__ void gift128_round_keys(
     }
 }
 
-__device__ __forceinline__ void gift128_pack(
-    uint32_t p[128],
-    Gift128Block x,
-    unsigned mask
-) {
+__device__ __forceinline__ void gift128_pack(uint32_t p[128], Gift128Block x, unsigned mask) {
     #pragma unroll
     for (int i = 0; i < 64; i++)
         p[i] = __ballot_sync(mask, (x.lo >> i) & 1ull);
@@ -104,10 +128,7 @@ __device__ __forceinline__ void gift128_pack(
         p[64 + i] = __ballot_sync(mask, (x.hi >> i) & 1ull);
 }
 
-__device__ __forceinline__ Gift128Block gift128_unpack(
-    const uint32_t p[128],
-    int lane
-) {
+__device__ __forceinline__ Gift128Block gift128_unpack(const uint32_t p[128], int lane) {
     Gift128Block x;
     x.lo = 0;
     x.hi = 0;
@@ -123,10 +144,7 @@ __device__ __forceinline__ Gift128Block gift128_unpack(
     return x;
 }
 
-__device__ __forceinline__ void gift128_subcells(
-    uint32_t p[128],
-    bool inverse
-) {
+__device__ __forceinline__ void gift128_subcells(uint32_t p[128], bool inverse) {
     #pragma unroll
     for (int n = 0; n < 32; n++) {
         uint32_t x0 = p[4*n + 0];
@@ -148,8 +166,7 @@ __device__ __forceinline__ void gift128_subcells(
             term &= (v & 4) ? x2 : ~x2;
             term &= (v & 8) ? x3 : ~x3;
 
-            uint8_t y = inverse ? gift_inv_sbox((uint8_t)v)
-                                : gift_sbox((uint8_t)v);
+            uint8_t y = inverse ? gift_inv_sbox((uint8_t)v) : gift_sbox((uint8_t)v);
 
             if (y & 1) y0 |= term;
             if (y & 2) y1 |= term;
@@ -188,12 +205,7 @@ __device__ __forceinline__ void gift128_inv_permute(uint32_t p[128]) {
         p[i] = t[i];
 }
 
-__device__ __forceinline__ void gift128_add_key(
-    uint32_t p[128],
-    uint32_t U,
-    uint32_t V,
-    uint8_t rc
-) {
+__device__ __forceinline__ void gift128_add_key(uint32_t p[128], uint32_t U, uint32_t V,uint8_t rc) {
     #pragma unroll
     for (int i = 0; i < 32; i++) {
         if ((U >> i) & 1u) p[4*i + 2] ^= 0xffffffffu;
@@ -210,11 +222,7 @@ __device__ __forceinline__ void gift128_add_key(
     if ((rc >> 0) & 1u) p[3]  ^= 0xffffffffu;
 }
 
-__device__ __forceinline__ Gift128Block gift128_encrypt_warp_bitslice(
-    Gift128Block in,
-    const uint16_t key[8],
-    unsigned mask
-) {
+__device__ __forceinline__ Gift128Block gift128_encrypt_bl(Gift128Block in, const uint16_t key[8], unsigned mask) {
     uint32_t U[GIFT128_ROUNDS];
     uint32_t V[GIFT128_ROUNDS];
     uint8_t RC[GIFT128_ROUNDS];
@@ -233,11 +241,7 @@ __device__ __forceinline__ Gift128Block gift128_encrypt_warp_bitslice(
     return gift128_unpack(p, threadIdx.x & 31);
 }
 
-__device__ __forceinline__ Gift128Block gift128_decrypt_warp_bitslice(
-    Gift128Block in,
-    const uint16_t key[8],
-    unsigned mask
-) {
+__device__ __forceinline__ Gift128Block gift128_decrypt_warp_bitslice(Gift128Block in, const uint16_t key[8], unsigned mask) {
     uint32_t U[GIFT128_ROUNDS];
     uint32_t V[GIFT128_ROUNDS];
     uint8_t RC[GIFT128_ROUNDS];
@@ -254,3 +258,4 @@ __device__ __forceinline__ Gift128Block gift128_decrypt_warp_bitslice(
 
     return gift128_unpack(p, threadIdx.x & 31);
 }
+
