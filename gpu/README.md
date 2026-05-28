@@ -29,7 +29,3 @@ Use the GPU test runner with profiling enabled:
 ```bash
 ./run_tests.sh --cipher present --mode cbc --profile
 ```
-
-### Notes
-
-- AES GPU implementation is not available yet; `--cipher aes` will be skipped by the GPU test harness.
