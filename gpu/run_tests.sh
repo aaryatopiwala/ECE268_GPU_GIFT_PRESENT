@@ -253,12 +253,18 @@ cubin_analysis() {
 
     cuobjdump -elf "$binary" 2>/dev/null | awk '
         /Size/ && /\.text/ {
-            match($0, /Size[[:space:]]+([0-9]+)/, a)
-            if (a[1]) printf "  cubin_text_bytes_%d=%s\n", NR, a[1]
+            if (match($0, /Size[[:space:]]+[0-9]+/)) {
+                val = substr($0, RSTART, RLENGTH)
+                sub(/Size[[:space:]]+/, "", val)
+                if (val) printf "  cubin_text_bytes_%d=%s\n", NR, val
+            }
         }
         /Size/ && /\.nv\.constant/ {
-            match($0, /Size[[:space:]]+([0-9]+)/, a)
-            if (a[1]) printf "  cubin_const_bytes_%d=%s\n", NR, a[1]
+            if (match($0, /Size[[:space:]]+[0-9]+/)) {
+                val = substr($0, RSTART, RLENGTH)
+                sub(/Size[[:space:]]+/, "", val)
+                if (val) printf "  cubin_const_bytes_%d=%s\n", NR, val
+            }
         }
     ' || true
 
@@ -294,9 +300,11 @@ constant_mem_layout() {
             line = $0
             sub(/^__constant__[[:space:]]+/, "", line)
             dims = ""; total = 1
-            while (match(line, /\[([0-9]+)\]/, arr)) {
-                dims = dims "[" arr[1] "]"
-                total *= arr[1]
+            while (match(line, /\[[0-9]+\]/)) {
+                num = substr(line, RSTART, RLENGTH)
+                gsub(/[^0-9]/, "", num)
+                dims = dims "[" num "]"
+                total *= num
                 sub(/\[[0-9]+\]/, "", line)
             }
             n = split(line, parts, /[[:space:];=]+/)
@@ -321,9 +329,14 @@ constant_mem_layout() {
         /^__device__/ { in_dev = 1 }
         /^__global__/ { in_dev = 0 }
         /^[a-zA-Z]/ && !/^__/ { in_dev = 0 }
-        in_dev && match($0, /uint([0-9]+)_t[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)\[([0-9]+)\]/, arr) {
-            esize = arr[1] / 8
-            printf "  device_local_array=%-20s  type=uint%s_t  count=%-4s  bytes=%d\n", \
+        in_dev && match($0, /uint[0-9]+_t[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*\[[0-9]+\]/) {
+            m = substr($0, RSTART, RLENGTH)
+            split(m, arr, /[[:space:]\[\]]+/)
+            type_str = arr[1]
+            bits = type_str
+            gsub(/[^0-9]/, "", bits)
+            esize = bits / 8
+            printf "  device_local_array=%-20s  type=%s  count=%-4s  bytes=%d\n", \
                 arr[2], arr[1], arr[3], arr[3] * esize
         }
     ' "${kernel_files[@]}"
