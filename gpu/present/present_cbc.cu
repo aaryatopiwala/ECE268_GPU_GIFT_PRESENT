@@ -9,7 +9,7 @@
 #define NUM_STREAMS 4
 
 __global__ void encryptCBCKernel(const uint8_t* plaintext, uint8_t* ciphertext, 
-                                 size_t length, const uint64_t* key, uint64_t iv) {
+                                 size_t length, const uint64_t* round_keys, uint64_t iv) {
     uint64_t prev = iv;
     for (size_t i = 0; i < length; i += 8) {
         uint64_t block = ((uint64_t)plaintext[i]   << 56) | ((uint64_t)plaintext[i+1] << 48) |
@@ -18,7 +18,7 @@ __global__ void encryptCBCKernel(const uint8_t* plaintext, uint8_t* ciphertext,
                          ((uint64_t)plaintext[i+6] <<  8) | ((uint64_t)plaintext[i+7]);
         block ^= prev;
         uint64_t cipher_block;
-        present80_encrypt(&block, key, &cipher_block);
+        present80_encrypt(&block, round_keys, &cipher_block);
 
         ciphertext[i]   = (cipher_block >> 56) & 0xFF;
         ciphertext[i+1] = (cipher_block >> 48) & 0xFF;
@@ -34,7 +34,7 @@ __global__ void encryptCBCKernel(const uint8_t* plaintext, uint8_t* ciphertext,
 }
 
 __global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext, 
-                                 size_t length, const uint64_t* key, uint64_t iv) {
+                                 size_t length, const uint64_t* round_keys, uint64_t iv) {
     size_t tid    = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
     for (size_t i = tid * 8; i < length; i += stride * 8) {
@@ -44,7 +44,7 @@ __global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext,
                                 ((uint64_t)ciphertext[i+6] <<  8) | ((uint64_t)ciphertext[i+7]);
 
         uint64_t block;
-        present80_decrypt(&cipher_block, key, &block);
+        present80_decrypt(&cipher_block, round_keys, &block);
         uint64_t prev = (i == 0) ? iv
                                  : (((uint64_t)ciphertext[i-8] << 56) | ((uint64_t)ciphertext[i-7] << 48) |
                                     ((uint64_t)ciphertext[i-6] << 40) | ((uint64_t)ciphertext[i-5] << 32) |
@@ -118,14 +118,32 @@ int main(int argc, char* argv[]) {
     uint8_t*  d_in;
     uint8_t*  d_out;
     uint64_t* d_key;
+    uint64_t* d_round_keys;
     cudaMalloc(&d_in,  BUFFER_SIZE + 8);
     cudaMalloc(&d_out, BUFFER_SIZE + 8);
     cudaMalloc(&d_key, 2 * sizeof(uint64_t));
+    cudaMalloc(&d_round_keys, 32 * sizeof(uint64_t));
     cudaMemcpy(d_key, key, 2 * sizeof(uint64_t), cudaMemcpyHostToDevice);
 
     cudaStream_t streams[NUM_STREAMS];
     for (int i = 0; i < NUM_STREAMS; i++)
         cudaStreamCreate(&streams[i]);
+
+    cudaEvent_t start_ks, stop_ks;
+    cudaEventCreate(&start_ks);
+    cudaEventCreate(&stop_ks);
+
+    cudaEventRecord(start_ks);
+    get_round_keys<<<1, 1>>>(d_key, d_round_keys);
+    cudaEventRecord(stop_ks);
+    cudaEventSynchronize(stop_ks);
+
+    float ks_ms = 0;
+    cudaEventElapsedTime(&ks_ms, start_ks, stop_ks);
+    fprintf(stdout, "    [Time Complexity] Key Schedule Kernel: %f ms\n", ks_ms);
+
+    cudaEventDestroy(start_ks);
+    cudaEventDestroy(stop_ks);
 
     Timer t;
     t.start();
@@ -150,7 +168,7 @@ int main(int argc, char* argv[]) {
             }
 
             cudaMemcpyAsync(d_in, h_in, process_size, cudaMemcpyHostToDevice, streams[0]);
-            encryptCBCKernel<<<1, 1, 0, streams[0]>>>(d_in, d_out, process_size, d_key, prev_cipher);
+            encryptCBCKernel<<<1, 1, 0, streams[0]>>>(d_in, d_out, process_size, d_round_keys, prev_cipher);
             cudaMemcpyAsync(h_out, d_out, process_size, cudaMemcpyDeviceToHost, streams[0]);
             cudaStreamSynchronize(streams[0]);
 
@@ -187,7 +205,7 @@ int main(int argc, char* argv[]) {
 
                 cudaMemcpyAsync(d_in  + offset, h_in + offset, chunk_size, cudaMemcpyHostToDevice, streams[s]);
                 decryptCBCKernel<<<blocks, threads, 0, streams[s]>>>(
-                    d_in + offset, d_out + offset, chunk_size, d_key, chunk_iv);
+                    d_in + offset, d_out + offset, chunk_size, d_round_keys, chunk_iv);
                 cudaMemcpyAsync(h_out + offset, d_out + offset, chunk_size, cudaMemcpyDeviceToHost, streams[s]);
             }
             cudaDeviceSynchronize();
@@ -219,6 +237,7 @@ int main(int argc, char* argv[]) {
     cudaFree(d_in);
     cudaFree(d_out);
     cudaFree(d_key);
+    cudaFree(d_round_keys);
     cudaFreeHost(h_in);
     cudaFreeHost(h_out);
     fclose(input_file);

@@ -47,17 +47,13 @@ __constant__ uint64_t d_T[16][16] = {
 };
 
 __device__ static void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
-    static uint64_t curr_key[2] = {0, 0};
-    static uint64_t curr_round_keys[32] = {0};
-    static bool valid = false;
-
-    if (!valid || curr_key[0] != key[0] || curr_key[1] != key[1]) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
         uint64_t key_reg1 = key[0];
         uint64_t key_reg2 = key[1];
 
         for (int i = 0; i < 32; i++) {
             // leftmost 64 bits of 80 bit key
-            curr_round_keys[i] = (key_reg2 << 48) | (key_reg1 >> 16);
+            round_keys[i] = (key_reg2 << 48) | (key_reg1 >> 16);
 
             // rotate left by 61 is equivalent to rotate right by 19
             uint64_t new_key_reg2 = ((key_reg1 >> 3) & 0xFFFFULL);
@@ -73,21 +69,11 @@ __device__ static void get_round_keys(const uint64_t *key, uint64_t *round_keys)
             // round counter
             key_reg1 ^= (((i + 1) & 0x1F) << 15);
         }
-
-        curr_key[0] = key[0];
-        curr_key[1] = key[1];
-        valid = true;
     }
-
-    memcpy(round_keys, curr_round_keys, sizeof(uint64_t) * 32);
 }
 
-__device__ int present80_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
+__device__ int present80_encrypt(const uint64_t *plaintext, const uint64_t *round_keys, uint64_t *ciphertext) {
     uint64_t state = *plaintext;
-
-    // generate round keys
-    uint64_t round_keys[32];
-    get_round_keys(key, round_keys);
 
     for (int round = 0; round < 31; round++) {
         // add round key
@@ -110,12 +96,8 @@ __device__ int present80_encrypt(const uint64_t *plaintext, const uint64_t *key,
     return 0; // Return 0 on success
 }
 
-__device__ int present80_decrypt(const uint64_t *ciphertext, const uint64_t *key, uint64_t *plaintext) {
+__device__ int present80_decrypt(const uint64_t *ciphertext, const uint64_t *round_keys, uint64_t *plaintext) {
     uint64_t state = *ciphertext;
-
-    // generate round keys
-    uint64_t round_keys[32];
-    get_round_keys(key, round_keys);
 
     // first round key addition
     state ^= round_keys[31];
@@ -138,7 +120,6 @@ __device__ int present80_decrypt(const uint64_t *ciphertext, const uint64_t *key
 
         // add round key
         state ^= round_keys[round];
-        //fprintf(stdout, "Round %d: %016lx\n", round, state);
     }
 
     memcpy(plaintext, &state, 8); // Copy the final state to plaintext

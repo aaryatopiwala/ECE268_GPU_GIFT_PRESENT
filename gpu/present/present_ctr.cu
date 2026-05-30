@@ -8,13 +8,13 @@
 #define BUFFER_SIZE (8 * 1024 * 1024)
 #define NUM_STREAMS 4
 
-__global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext, size_t length, const uint64_t* key, uint64_t counter) {
+__global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext, size_t length, const uint64_t* round_keys, uint64_t counter) {
     size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
     for (size_t i = tid * 8; i < length; i += stride * 8) {
         uint64_t block = counter + (i / 8);
         uint64_t cipher_block;
-        present80_encrypt(&block, key, &cipher_block);
+        present80_encrypt(&block, round_keys, &cipher_block);
 
         ciphertext[i] = ((cipher_block >> 56) & 0xFF) ^ plaintext[i];
         ciphertext[i+1] = ((cipher_block >> 48) & 0xFF) ^ plaintext[i+1];
@@ -81,14 +81,32 @@ int main(int argc, char* argv[]) {
     uint8_t*  d_in;
     uint8_t*  d_out;
     uint64_t* d_key;
+    uint64_t* d_round_keys;
     cudaMalloc(&d_in,  BUFFER_SIZE + 8);
     cudaMalloc(&d_out, BUFFER_SIZE + 8);
     cudaMalloc(&d_key, 2 * sizeof(uint64_t));
+    cudaMalloc(&d_round_keys, 32 * sizeof(uint64_t));
     cudaMemcpy(d_key, key, 2 * sizeof(uint64_t), cudaMemcpyHostToDevice);
 
     cudaStream_t streams[NUM_STREAMS];
     for (int i = 0; i < NUM_STREAMS; i++)
         cudaStreamCreate(&streams[i]);
+
+    cudaEvent_t start_ks, stop_ks;
+    cudaEventCreate(&start_ks);
+    cudaEventCreate(&stop_ks);
+
+    cudaEventRecord(start_ks);
+    get_round_keys<<<1, 1>>>(d_key, d_round_keys);
+    cudaEventRecord(stop_ks);
+    cudaEventSynchronize(stop_ks);
+
+    float ks_ms = 0;
+    cudaEventElapsedTime(&ks_ms, start_ks, stop_ks);
+    fprintf(stdout, "    [Time Complexity] Key Schedule Kernel: %f ms\n", ks_ms);
+
+    cudaEventDestroy(start_ks);
+    cudaEventDestroy(stop_ks);
 
     Timer t;
     t.start();
@@ -122,7 +140,7 @@ int main(int argc, char* argv[]) {
             int blocks  = (num_blocks_per_chunk + threads - 1) / threads;
             if (blocks == 0) blocks = 1;
             cudaMemcpyAsync(d_in + offset, h_in + offset, current_chunk_size, cudaMemcpyHostToDevice, streams[s]);
-            encryptCTRKernel<<<blocks, threads, 0, streams[s]>>>(d_in + offset, d_out + offset, current_chunk_size, d_key, stream_counter);
+            encryptCTRKernel<<<blocks, threads, 0, streams[s]>>>(d_in + offset, d_out + offset, current_chunk_size, d_round_keys, stream_counter);
             cudaMemcpyAsync(h_out + offset, d_out + offset, current_chunk_size, cudaMemcpyDeviceToHost, streams[s]);
         }
         cudaDeviceSynchronize();
@@ -144,8 +162,12 @@ int main(int argc, char* argv[]) {
     fprintf(stdout, "[timer] total: %ld ms\n", t.stopMs());
 
     for (int i = 0; i < NUM_STREAMS; i++) cudaStreamDestroy(streams[i]);
-    cudaFree(d_in); cudaFree(d_out); cudaFree(d_key);
-    cudaFreeHost(h_in); cudaFreeHost(h_out);
+    cudaFree(d_in);
+    cudaFree(d_out);
+    cudaFree(d_key);
+    cudaFree(d_round_keys);
+    cudaFreeHost(h_in);
+    cudaFreeHost(h_out);
     fclose(input_file);
     fclose(output_file);
     return 0;
