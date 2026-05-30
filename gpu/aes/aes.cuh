@@ -57,45 +57,30 @@ __device__ void print_state(uint8_t state[4][4]) {
     printf("\n");
 }
 
-__device__ static void get_round_keys(const uint64_t *key, uint32_t *round_keys) {
-    // use key expansion algo
-    static bool initialized = false;
-    static uint64_t curr_key[2] = {0, 0};
-    static uint32_t curr_round_keys[44] = {0}; // 44 32-bit words for AES-128
-    if (initialized && curr_key[0] == key[0] && curr_key[1] == key[1]) {
-        memcpy(round_keys, curr_round_keys, sizeof(uint32_t) * 44);
-        return;
-    }
-    uint32_t key_reg0 = (key[0] >> 32) & 0xFFFFFFFF;
-    uint32_t key_reg1 = (key[0] >> 0) & 0xFFFFFFFF;
-    uint32_t key_reg2 = (key[1] >> 32) & 0xFFFFFFFF;
-    uint32_t key_reg3 = (key[1] >> 0) & 0xFFFFFFFF;
+__global__ void get_round_keys(const uint64_t *key, uint32_t *round_keys) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        uint32_t key_reg0 = (key[0] >> 32) & 0xFFFFFFFF;
+        uint32_t key_reg1 = (key[0] >> 0) & 0xFFFFFFFF;
+        uint32_t key_reg2 = (key[1] >> 32) & 0xFFFFFFFF;
+        uint32_t key_reg3 = (key[1] >> 0) & 0xFFFFFFFF;
 
-    curr_round_keys[0] = key_reg0;
-    //printf("Round key 0: %08x\n", curr_round_keys[0]);
-    curr_round_keys[1] = key_reg1;
-    //printf("Round key 1: %08x\n", curr_round_keys[1]);
-    curr_round_keys[2] = key_reg2;
-    //printf("Round key 2: %08x\n", curr_round_keys[2]);
-    curr_round_keys[3] = key_reg3;
-    //printf("Round key 3: %08x\n", curr_round_keys[3]);
-    for (int i = 4; i < 44; i++) {
-        uint32_t temp = curr_round_keys[i-1];
-        if (i%4 == 0) {
-            // rotate
-            temp = (temp << 8) | (temp >> 24);
-            // subbytes
-            temp = (sbox[(temp >> 24) & 0xFF] << 24) | (sbox[(temp >> 16) & 0xFF] << 16) | (sbox[(temp >> 8) & 0xFF] << 8) | sbox[temp & 0xFF];
-            // rcon
-            temp ^= ((uint32_t)rcon[i/4 - 1] << 24);
+        round_keys[0] = key_reg0;
+        round_keys[1] = key_reg1;
+        round_keys[2] = key_reg2;
+        round_keys[3] = key_reg3;
+        for (int i = 4; i < 44; i++) {
+            uint32_t temp = round_keys[i-1];
+            if (i%4 == 0) {
+                // rotate
+                temp = (temp << 8) | (temp >> 24);
+                // subbytes
+                temp = (sbox[(temp >> 24) & 0xFF] << 24) | (sbox[(temp >> 16) & 0xFF] << 16) | (sbox[(temp >> 8) & 0xFF] << 8) | sbox[temp & 0xFF];
+                // rcon
+                temp ^= ((uint32_t)rcon[i/4 - 1] << 24);
+            }
+            round_keys[i] = round_keys[i - 4] ^ temp;
         }
-        curr_round_keys[i] = curr_round_keys[i - 4] ^ temp;
-        //printf("Round key %d: %08x\n", i, curr_round_keys[i]);
     }
-    memcpy(round_keys, curr_round_keys, sizeof(uint32_t) * 44);
-    curr_key[0] = key[0];
-    curr_key[1] = key[1];
-    initialized = true;
 }
 
 
@@ -115,10 +100,8 @@ __device__ uint8_t gf_mul(uint8_t a, uint8_t b) {
 
 __device__ void addRoundKey(uint8_t state[4][4], uint32_t roundKey[4], uint8_t newState[4][4]) {
     for (int c = 0; c < 4; c++) {
-        //printf("Adding round key %08x for column %d:\n", roundKey[c], c);
         for (int r = 0; r < 4; r++) {
             newState[r][c] = state[r][c] ^ ((roundKey[c] >> (8 * (3-r))) & 0xFF);
-            //printf("AddRoundKey: state[%d][%d] = %02x ^ %02x = %02x\n", r, c, state[r][c], (roundKey[c] >> (8 * (3-r))) & 0xFF, newState[r][c]);
         }
     }
 }
@@ -148,7 +131,7 @@ __device__ void mixColumns(uint8_t state[4][4], uint8_t newState[4][4]) {
     }
 }
 
-__device__ int aes128_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
+__device__ int aes128_encrypt(const uint64_t *plaintext, const uint64_t *round_keys, uint64_t *ciphertext) {
     
     // state
     uint64_t state1 = plaintext[0];
@@ -172,9 +155,6 @@ __device__ int aes128_encrypt(const uint64_t *plaintext, const uint64_t *key, ui
     state[2][3] = (state2 >> 8) & 0xFF;
     state[3][3] = (state2 >> 0) & 0xFF;
     uint8_t new_state[4][4];
-
-    uint32_t round_keys[44];
-    get_round_keys(key, round_keys);
 
     // state with round key
     uint32_t currRoundKey[4] = {round_keys[0], round_keys[1], round_keys[2], round_keys[3]};
@@ -271,7 +251,7 @@ __device__ void invMixColumns(uint8_t state[4][4], uint8_t newState[4][4]) {
     }
 }
 
-__device__ int aes128_decrypt(const uint64_t *ciphertext, const uint64_t *key, uint64_t *plaintext) {
+__device__ int aes128_decrypt(const uint64_t *ciphertext, const uint64_t *round_keys, uint64_t *plaintext) {
     // state
     uint64_t state1 = ciphertext[0];
     uint64_t state2 = ciphertext[1];
@@ -294,9 +274,6 @@ __device__ int aes128_decrypt(const uint64_t *ciphertext, const uint64_t *key, u
     state[2][3] = (state2 >> 8) & 0xFF;
     state[3][3] = (state2 >> 0) & 0xFF;
     uint8_t new_state[4][4];
-
-    uint32_t round_keys[44];
-    get_round_keys(key, round_keys);
 
     // state with round key
     uint32_t currRoundKey[4] = {round_keys[40], round_keys[41], round_keys[42], round_keys[43]};
