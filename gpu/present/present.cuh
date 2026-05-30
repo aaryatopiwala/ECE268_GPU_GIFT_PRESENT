@@ -46,7 +46,7 @@ __constant__ uint64_t d_T[16][16] = {
     { 9223512774343131136ULL, 140737488388096ULL, 140739635838976ULL, 9223372039002292224ULL, 9223372036854808576ULL, 0ULL, 9223372039002259456ULL, 9223512774343163904ULL, 2147516416ULL, 9223512776490614784ULL, 9223512776490647552ULL, 9223372036854775808ULL, 140737488355328ULL, 140739635871744ULL, 32768ULL, 2147483648ULL }
 };
 
-__device__ static void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
+__global__ void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         uint64_t key_reg1 = key[0];
         uint64_t key_reg2 = key[1];
