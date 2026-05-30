@@ -20,6 +20,9 @@ SELECT_MODE="all"
 OVERRIDE_KEY=""
 OVERRIDE_IV=""
 PROFILE=false
+STATIC_ONLY=false
+NO_STATIC=false
+CLEAN_BUILD=false
 
 HAS_NCU=false
 HAS_CUOBJDUMP=false
@@ -35,21 +38,32 @@ Options:
   --key <hex>
   --iv <hex>
   --profile
+  --static-only
+  --no-static
+  --clean
   --help
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --cipher)  SELECT_CIPHER="${2,,}"; shift 2 ;;
-        --mode)    SELECT_MODE="${2,,}";   shift 2 ;;
-        --key)     OVERRIDE_KEY="$2";     shift 2 ;;
-        --iv)      OVERRIDE_IV="$2";      shift 2 ;;
-        --profile) PROFILE=true;          shift   ;;
-        --help|-h) usage; exit 0 ;;
+        --cipher)      SELECT_CIPHER="${2,,}"; shift 2 ;;
+        --mode)        SELECT_MODE="${2,,}";   shift 2 ;;
+        --key)         OVERRIDE_KEY="$2";     shift 2 ;;
+        --iv)          OVERRIDE_IV="$2";      shift 2 ;;
+        --profile)     PROFILE=true;          shift   ;;
+        --static-only) STATIC_ONLY=true;      shift   ;;
+        --no-static)   NO_STATIC=true;        shift   ;;
+        --clean)       CLEAN_BUILD=true;      shift   ;;
+        --help|-h)     usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+if [ "$CLEAN_BUILD" = true ]; then
+    echo "Cleaning build directory..."
+    rm -rf "$BUILD_DIR"
+fi
 
 command -v ncu       &>/dev/null && HAS_NCU=true       || true
 command -v cuobjdump &>/dev/null && HAS_CUOBJDUMP=true || true
@@ -93,6 +107,8 @@ build_target() {
     cmake "$REPO_DIR" -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_FLAGS="-Xptxas -v --generate-line-info" \
         >/dev/null 2>&1
+    rm -f "$target"
+    
     make -j"$(num_cpus)" "$target" 2>"$ptxas_log.raw" >/dev/null || { cat "$ptxas_log.raw" >&2; return 1; }
     grep -E "ptxas info:|Used [0-9]+ registers|lmem|smem|cmem" "$ptxas_log.raw" > "$ptxas_log" || true
 }
@@ -551,10 +567,14 @@ declare -A STATIC_DONE
 for cipher in "${SUPPORTED_CIPHERS[@]}"; do
     should_test_cipher "$cipher" || continue
 
-    if [ -z "${STATIC_DONE[$cipher]+x}" ]; then
+    if [ "$NO_STATIC" = false ] && [ -z "${STATIC_DONE[$cipher]+x}" ]; then
         echo "static_analysis cipher=$cipher"
         static_analysis_cipher "$cipher"
         STATIC_DONE[$cipher]=1
+    fi
+
+    if [ "$STATIC_ONLY" = true ]; then
+        continue
     fi
 
     for mode in "${SUPPORTED_MODES[@]}"; do
