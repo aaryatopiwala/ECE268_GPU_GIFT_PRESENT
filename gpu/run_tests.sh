@@ -65,7 +65,6 @@ get_plaintext_files() {
         ! -name "*de.*" | sort
 }
 
-# Returns "<exit_status> <wall_ms>"
 time_command() {
     local start_ns end_ns status=0
     start_ns=$(date +%s%N)
@@ -87,8 +86,6 @@ throughput_str() {
     fi
 }
 
-
-# Build
 build_target() {
     local target="$1" ptxas_log="$2"
     mkdir -p "$BUILD_DIR"
@@ -96,20 +93,17 @@ build_target() {
     cmake "$REPO_DIR" -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_FLAGS="-Xptxas -v --generate-line-info" \
         >/dev/null 2>&1
-    # make writes ptxas output to stderr; capture it, filter to ptxas lines only
     make -j"$(num_cpus)" "$target" 2>"$ptxas_log.raw" >/dev/null || { cat "$ptxas_log.raw" >&2; return 1; }
     grep -E "ptxas info:|Used [0-9]+ registers|lmem|smem|cmem" "$ptxas_log.raw" > "$ptxas_log" || true
 }
 
-
-# Count code lines in a set of files, stripping blank lines and // /* */ comments. Prints a single integer.
 count_code_lines_awk() {
     awk '
-        /^[[:space:]]*$/ { next }                  # blank
-        /^[[:space:]]*\/\// { next }               # // comment
+        /^[[:space:]]*$/    { next }
+        /^[[:space:]]*\/\// { next }
         /^[[:space:]]*\/\*/ { in_block=1 }
-        in_block && /\*\// { in_block=0; next }
-        in_block { next }
+        in_block && /\*\//  { in_block=0; next }
+        in_block            { next }
         { code++ }
         END { print code+0 }
     ' "$@"
@@ -117,12 +111,10 @@ count_code_lines_awk() {
 
 source_loc_analysis() {
     local cipher="$1"
-    local src_dir="$REPO_DIR/$cipher"  # adjust if your layout differs
+    local src_dir="$REPO_DIR/$cipher"
     [ -d "$src_dir" ] || src_dir="$REPO_DIR/src/$cipher"
     [ -d "$src_dir" ] || src_dir="$REPO_DIR"
 
-    # Kernel/device source files: <cipher>.cuh, <cipher>.cu
-    # Harness files: <cipher>_cbc.cu, <cipher>_ctr.cu — excluded
     local kernel_files=()
     while IFS= read -r f; do
         kernel_files+=("$f")
@@ -144,46 +136,43 @@ source_loc_analysis() {
         for f in "${kernel_files[@]}"; do
             local rel="${f#$REPO_DIR/}"
             local total blank comment code
-            total=$(wc -l < "$f")
-            blank=$(awk '/^[[:space:]]*$/{c++} END{print c+0}' "$f")
+            total=$(  awk 'END{print NR}' "$f")
+            blank=$(  awk '/^[[:space:]]*$/{c++} END{print c+0}' "$f")
             comment=$(awk '
                 /^[[:space:]]*\/\// {c++; next}
                 /^[[:space:]]*\/\*/ {in_b=1}
                 in_b && /\*\// {in_b=0; c++; next}
                 in_b {c++}
-            END{print c+0}' "$f")
+                END{print c+0}' "$f")
             code=$(( total - blank - comment ))
 
-            printf "  kernel_file=%s\n"           "$rel"
-            printf "    loc_total=%d\n"           "$total"
-            printf "    loc_blank=%d\n"           "$blank"
-            printf "    loc_comment=%d\n"         "$comment"
-            printf "    loc_code=%d\n"            "$code"
+            printf "  kernel_file=%s\n"       "$rel"
+            printf "    loc_total=%s\n"       "$total"
+            printf "    loc_blank=%s\n"       "$blank"
+            printf "    loc_comment=%s\n"     "$comment"
+            printf "    loc_code=%s\n"        "$code"
 
-            # Count __global__ and __device__ functions
             local n_global n_device
-            n_global=$(grep -c "^__global__" "$f" 2>/dev/null || echo 0)
-            n_device=$( grep -c "^__device__" "$f" 2>/dev/null || echo 0)
-            printf "    kernel_functions=%d\n"    "$n_global"
-            printf "    device_functions=%d\n"    "$n_device"
+            n_global=$(grep -c "^__global__" "$f" 2>/dev/null || true); n_global=${n_global:-0}
+            n_device=$( grep -c "^__device__" "$f" 2>/dev/null || true); n_device=${n_device:-0}
+            printf "    kernel_functions=%s\n" "$n_global"
+            printf "    device_functions=%s\n" "$n_device"
         done
 
-        # Aggregate kernel code lines across all kernel files
         local total_kernel_code
         total_kernel_code=$(count_code_lines_awk "${kernel_files[@]}")
-        printf "  kernel_total_loc_code=%d\n" "$total_kernel_code"
+        printf "  kernel_total_loc_code=%s\n" "$total_kernel_code"
     fi
 
     if [ ${#harness_files[@]} -gt 0 ]; then
         local total_harness_code
         total_harness_code=$(count_code_lines_awk "${harness_files[@]}")
-        printf "  harness_total_loc_code=%d\n" "$total_harness_code"
+        printf "  harness_total_loc_code=%s\n" "$total_harness_code"
         for f in "${harness_files[@]}"; do
             printf "  harness_file=%s\n" "${f#$REPO_DIR/}"
         done
     fi
 
-    # cloc cross-check if available
     if [ "$HAS_CLOC" = true ] && [ ${#kernel_files[@]} -gt 0 ]; then
         local cloc_code
         cloc_code=$(cloc --quiet --csv "${kernel_files[@]}" 2>/dev/null \
@@ -206,11 +195,10 @@ ptx_analysis() {
         return
     fi
 
-    # Collect include dirs from cmake cache
     local inc_dirs=("-I$REPO_DIR")
     while IFS= read -r d; do
         inc_dirs+=("-I$d")
-    done < <(find "$REPO_DIR" -maxdepth 3 -type d -name "utils" -o -type d -name "include" 2>/dev/null)
+    done < <(find "$REPO_DIR" -maxdepth 3 -type d \( -name "utils" -o -name "include" \) 2>/dev/null)
 
     nvcc --ptx "${inc_dirs[@]}" \
         -O2 \
@@ -219,38 +207,34 @@ ptx_analysis() {
         "$src_file" \
         >/dev/null 2>&1 || { echo "  ptx_compile=failed"; return; }
 
-    if [ ! -f "$ptx_file" ]; then
-        echo "  ptx_file=missing"
-        return
-    fi
+    [ -f "$ptx_file" ] || { echo "  ptx_file=missing"; return; }
 
     local ptx_bytes ptx_lines ptx_instr_lines
-    ptx_bytes=$(wc -c < "$ptx_file")
-    ptx_lines=$(wc -l < "$ptx_file")
-    # PTX instruction lines: non-blank, non-comment, non-directive lines
+    ptx_bytes=$(     awk 'END{print FILENAME}' /dev/null; wc -c < "$ptx_file" | tr -d ' ')
+    ptx_bytes=$(     wc -c < "$ptx_file" | tr -d ' ')
+    ptx_lines=$(     awk 'END{print NR}' "$ptx_file")
     ptx_instr_lines=$(awk '
-        /^[[:space:]]*$/ { next }
+        /^[[:space:]]*$/    { next }
         /^[[:space:]]*\/\// { next }
-        /^[[:space:]]*\./ { next }
+        /^[[:space:]]*\./   { next }
         /^[[:space:]]*\/\*/ { in_b=1 }
-        in_b && /\*\// { in_b=0; next }
-        in_b { next }
-        /^[[:space:]]*[a-zA-Z_][^:]*:$/ { next }  # labels
+        in_b && /\*\//      { in_b=0; next }
+        in_b                { next }
+        /^[[:space:]]*[a-zA-Z_][^:]*:$/ { next }
         { count++ }
         END { print count+0 }
     ' "$ptx_file")
 
-    # Count __global__ (kernel entry) and __device__ function definitions in PTX
     local n_entries n_device_funcs
-    n_entries=$(grep -c "^\.visible \.entry\|^\.entry" "$ptx_file" 2>/dev/null || echo 0)
-    n_device_funcs=$(grep -c "^\.visible \.func\|^\.func" "$ptx_file" 2>/dev/null || echo 0)
+    n_entries=$(    grep -cE "^\.visible \.entry|^\.entry" "$ptx_file" 2>/dev/null || true); n_entries=${n_entries:-0}
+    n_device_funcs=$(grep -cE "^\.visible \.func|^\.func"  "$ptx_file" 2>/dev/null || true); n_device_funcs=${n_device_funcs:-0}
 
-    printf "  ptx_file=%s\n"             "$ptx_file"
-    printf "  ptx_size_bytes=%d\n"       "$ptx_bytes"
-    printf "  ptx_total_lines=%d\n"      "$ptx_lines"
-    printf "  ptx_instruction_lines=%d\n" "$ptx_instr_lines"
-    printf "  ptx_kernel_entries=%d\n"   "$n_entries"
-    printf "  ptx_device_funcs=%d\n"     "$n_device_funcs"
+    printf "  ptx_file=%s\n"              "$ptx_file"
+    printf "  ptx_size_bytes=%s\n"        "$ptx_bytes"
+    printf "  ptx_total_lines=%s\n"       "$ptx_lines"
+    printf "  ptx_instruction_lines=%s\n" "$ptx_instr_lines"
+    printf "  ptx_kernel_entries=%s\n"    "$n_entries"
+    printf "  ptx_device_funcs=%s\n"      "$n_device_funcs"
 }
 
 cubin_analysis() {
@@ -263,32 +247,26 @@ cubin_analysis() {
         return
     fi
 
-    # Binary size on disk
     local bin_bytes
-    bin_bytes=$(wc -c < "$binary")
-    printf "  binary_size_bytes=%d\n" "$bin_bytes"
+    bin_bytes=$(wc -c < "$binary" | tr -d ' ')
+    printf "  binary_size_bytes=%s\n" "$bin_bytes"
 
     cuobjdump -elf "$binary" 2>/dev/null | awk '
-        /^Fatbin elf code/ { arch=$0 }
         /Size/ && /\.text/ {
             match($0, /Size[[:space:]]+([0-9]+)/, a)
-            if (a[1]) printf "  cubin_text_bytes_%s=%s\n", NR, a[1]
+            if (a[1]) printf "  cubin_text_bytes_%d=%s\n", NR, a[1]
         }
         /Size/ && /\.nv\.constant/ {
             match($0, /Size[[:space:]]+([0-9]+)/, a)
-            if (a[1]) printf "  cubin_const_bytes_%s=%s\n", NR, a[1]
+            if (a[1]) printf "  cubin_const_bytes_%d=%s\n", NR, a[1]
         }
     ' || true
 
     local total_text total_const
     total_text=$(cuobjdump -elf "$binary" 2>/dev/null \
-        | awk '/\.text/{
-            for(i=1;i<=NF;i++) if($i~/^[0-9]+$/ && $i+0 > 16){sum+=$i+0; break}
-          } END{print sum+0}')
+        | awk '/\.text/{for(i=1;i<=NF;i++) if($i~/^[0-9]+$/ && $i+0>16){sum+=$i+0;break}} END{print sum+0}')
     total_const=$(cuobjdump -elf "$binary" 2>/dev/null \
-        | awk '/\.nv\.constant/{
-            for(i=1;i<=NF;i++) if($i~/^[0-9]+$/){sum+=$i+0; break}
-          } END{print sum+0}')
+        | awk '/\.nv\.constant/{for(i=1;i<=NF;i++) if($i~/^[0-9]+$/){sum+=$i+0;break}} END{print sum+0}')
 
     printf "  cubin_total_text_bytes=%s\n"  "${total_text:-0}"
     printf "  cubin_total_const_bytes=%s\n" "${total_const:-0}"
@@ -311,7 +289,6 @@ constant_mem_layout() {
         return
     fi
 
-    # Parse __constant__ declarations, infer byte size from type and array dimensions
     awk '
         /^__constant__/ {
             line = $0
@@ -325,10 +302,10 @@ constant_mem_layout() {
             n = split(line, parts, /[[:space:];=]+/)
             type = parts[1]; name = parts[2]; gsub(/[;=]/, "", name)
             esize = "?"
-            if (type ~ /uint8_t|int8_t|char/)    esize = 1
-            if (type ~ /uint16_t|int16_t/)        esize = 2
-            if (type ~ /uint32_t|int32_t|float/)  esize = 4
-            if (type ~ /uint64_t|int64_t|double/) esize = 8
+            if (type ~ /uint8_t|int8_t|char/)     esize = 1
+            if (type ~ /uint16_t|int16_t/)         esize = 2
+            if (type ~ /uint32_t|int32_t|float/)   esize = 4
+            if (type ~ /uint64_t|int64_t|double/)  esize = 8
             if (esize == "?")
                 printf "  const_var=%-20s  type=%-10s  dims=%-12s  bytes=?\n", name, type, dims
             else {
@@ -340,7 +317,6 @@ constant_mem_layout() {
         END { if (total_bytes) printf "  total_constant_declared_bytes=%d\n", total_bytes }
     ' "${kernel_files[@]}"
 
-    # Parse local arrays inside __device__ functions (candidate key schedule storage)
     awk '
         /^__device__/ { in_dev = 1 }
         /^__global__/ { in_dev = 0 }
@@ -387,15 +363,14 @@ parse_ncu() {
     dur=$(   grep -i "gpu__time_duration.sum"                 "$txt" | awk '{print $NF, $(NF-1)}' | head -1)
     tex=$(   grep -i "lts__t_sectors_srcunit_tex_op_read.sum" "$txt" | awk '{print $NF}' | head -1)
 
-    printf "    registers_per_thread=%s\n"  "${regs:-?}"
-    printf "    smem_static_bytes=%s\n"     "${smem_s:-?}"
-    printf "    smem_dynamic_bytes=%s\n"    "${smem_d:-?}"
-    printf "    occupancy_pct=%s\n"         "${occ:-?}"
-    printf "    gpu_kernel_duration=%s\n"   "${dur:-?}"
-    printf "    const_mem_tex_reads=%s\n"   "${tex:-?}"
+    printf "    registers_per_thread=%s\n" "${regs:-?}"
+    printf "    smem_static_bytes=%s\n"    "${smem_s:-?}"
+    printf "    smem_dynamic_bytes=%s\n"   "${smem_d:-?}"
+    printf "    occupancy_pct=%s\n"        "${occ:-?}"
+    printf "    gpu_kernel_duration=%s\n"  "${dur:-?}"
+    printf "    const_mem_tex_reads=%s\n"  "${tex:-?}"
 }
 
-# Static analysis — output goes to $RUNS_DIR/gpu/<cipher>/static_analysis.txt
 static_analysis_cipher() {
     local cipher="$1"
     local out_dir="$RUNS_DIR/gpu/$cipher"
@@ -494,7 +469,7 @@ run_test() {
         local plaintext_file
         plaintext_file=$(basename "$plaintext_path")
         local file_bytes
-        file_bytes=$(wc -c < "$plaintext_path")
+        file_bytes=$(wc -c < "$plaintext_path" | tr -d ' ')
 
         local key_iv
         if [ -n "$OVERRIDE_KEY" ] || [ -n "$OVERRIDE_IV" ]; then
@@ -513,7 +488,6 @@ run_test() {
         local dec_cmd=("$BUILD_DIR/$target" "-d" "$encrypted_file"  "$key" "$iv" "$decrypted_file")
         [ "$mode" = "ctr" ] && { enc_cmd+=("--nopad"); dec_cmd+=("--nopad"); }
 
-        # Encrypt
         local enc_result enc_status enc_ms
         enc_result=$(time_command "${enc_cmd[@]}")
         enc_status=${enc_result%% *}; enc_ms=${enc_result#* }
@@ -523,7 +497,6 @@ run_test() {
         fi
         local enc_tput; enc_tput=$(throughput_str "$file_bytes" "$enc_ms")
 
-        # Decrypt
         local dec_result dec_status dec_ms
         dec_result=$(time_command "${dec_cmd[@]}")
         dec_status=${dec_result%% *}; dec_ms=${dec_result#* }
@@ -533,7 +506,6 @@ run_test() {
         fi
         local dec_tput; dec_tput=$(throughput_str "$file_bytes" "$dec_ms")
 
-        # Verify
         local verify="PASS"
         cmp -s "$decrypted_file" "$plaintext_path" || verify="FAIL"
 
@@ -561,7 +533,6 @@ run_test() {
     echo "  -> $results_file"
 }
 
-# Track which ciphers we've already run static analysis for
 declare -A STATIC_DONE
 
 for cipher in "${SUPPORTED_CIPHERS[@]}"; do
