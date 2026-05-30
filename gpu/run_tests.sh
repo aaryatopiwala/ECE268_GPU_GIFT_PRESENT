@@ -11,6 +11,9 @@ BUILD_DIR="$REPO_DIR/build"
 SUPPORTED_CIPHERS=(present gift aes)
 SUPPORTED_MODES=(ctr cbc)
 
+KEYSET="inc"
+SELECT_FILE=""
+
 declare -A DEFAULT_KEY_IV
 DEFAULT_KEY_IV=(
     ["beemovie.txt"]="00000000000000000000:0"
@@ -35,6 +38,8 @@ usage() {
 Usage: $0 [options]
 
 Options:
+  --file <filename>                Test only one plaintext file.
+  --keyset <zero|inc|ff|all>       Select built-in key/IV vector set (default: inc).
   --cipher <present|gift|aes|all>  Specify the target cipher algorithm.
   --mode <ctr|cbc|all>             Specify the block cipher mode of operation.
   --key <hex>                      Override the default encryption key.
@@ -53,6 +58,10 @@ while [[ $# -gt 0 ]]; do
         --mode)        SELECT_MODE="${2,,}";   shift 2 ;;
         --key)         OVERRIDE_KEY="$2";     shift 2 ;;
         --iv)          OVERRIDE_IV="$2";      shift 2 ;;
+        --file)        SELECT_FILE="$2"; 
+shift 2 ;;
+        --keyset)      KEYSET="${2,,}";  
+shift 2 ;;
         --profile)     PROFILE=true;          shift   ;;
         --static-only) STATIC_ONLY=true;      shift   ;;
         --no-static)   NO_STATIC=true;        shift   ;;
@@ -67,6 +76,13 @@ if [ "$CLEAN_BUILD" = true ] && [ -d "$BUILD_DIR" ]; then
     find "$BUILD_DIR" -mindepth 1 -delete 2>/dev/null || true
 fi
 
+if command -v nvidia-smi &> /dev/null; then
+    nvidia-smi >/dev/null || { echo "CRITICAL ERROR: nvidia-smi failed. GPU driver is missing or broken on this node."; exit 1; }
+else
+    echo "CRITICAL ERROR: nvidia-smi not found. This node does not have NVIDIA tools installed."
+    exit 1
+fi
+
 command -v nsys      &>/dev/null && HAS_NSYS=true      || true
 command -v cuobjdump &>/dev/null && HAS_CUOBJDUMP=true || true
 command -v cloc      &>/dev/null && HAS_CLOC=true      || true
@@ -75,18 +91,77 @@ should_test_cipher() { [ "$SELECT_CIPHER" = "all" ] || [ "$1" = "$SELECT_CIPHER"
 should_test_mode()   { [ "$SELECT_MODE"   = "all" ] || [ "$1" = "$SELECT_MODE"   ]; }
 num_cpus() { getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1; }
 
+# get_plaintext_files() {
+#     find "$TESTS_DIR" -maxdepth 1 -type f \
+#         \( -name "*.bin" -o -name "*.txt" -o -name "*.mp4" \) \
+#         ! -name "*de.*" | sort
+# }
+
 get_plaintext_files() {
-    find "$TESTS_DIR" -maxdepth 1 -type f \
-        \( -name "*.bin" -o -name "*.txt" -o -name "*.mp4" \) \
-        ! -name "*de.*" | sort
+    if [ -n "$SELECT_FILE" ]; then
+        find "$TESTS_DIR" -maxdepth 1 -type f -name "$SELECT_FILE" | sort
+    else
+        find "$TESTS_DIR" -maxdepth 1 -type f \
+            \( -name "*.bin" -o -name "*.txt" -o -name "*.mp4" -o -name "*.dat" -o -name "*.raw" \) \
+            ! -name "*de.*" | sort
+    fi
 }
 
+get_key_ivs() {
+    local cipher="$1"
+
+    case "$cipher" in
+        present)
+            echo "zero:00000000000000000000:0"
+            echo "inc:00112233445566778899:0102030405060708"
+            echo "ff:ffffffffffffffffffff:ffffffffffffffff"
+            ;;
+        gift|aes)
+            echo "zero:00000000000000000000000000000000:00000000000000000000000000000000"
+            echo "inc:00112233445566778899aabbccddeeff:0102030405060708090a0b0c0d0e0f10"
+            echo "ff:ffffffffffffffffffffffffffffffff:ffffffffffffffffffffffffffffffff"
+            ;;
+    esac
+}
+
+get_selected_key_ivs() {
+    local cipher="$1"
+
+    if [ -n "$OVERRIDE_KEY" ] || [ -n "$OVERRIDE_IV" ]; then
+        case "$cipher" in
+            present)
+                echo "override:${OVERRIDE_KEY:-00000000000000000000}:${OVERRIDE_IV:-0}"
+                ;;
+            gift|aes)
+                echo "override:${OVERRIDE_KEY:-00000000000000000000000000000000}:${OVERRIDE_IV:-00000000000000000000000000000000}"
+                ;;
+        esac
+        return
+    fi
+
+    case "$KEYSET" in
+        all)
+            get_key_ivs "$cipher"
+            ;;
+        zero|inc|ff)
+            get_key_ivs "$cipher" | awk -F: -v k="$KEYSET" '$1 == k'
+            ;;
+        *)
+            echo "Unknown keyset: $KEYSET" >&2
+            exit 1
+            ;;
+    esac
+}
 time_command() {
     local start_ns end_ns status=0
+    local out_file="$1"
+    shift
+    
     start_ns=$(date +%s%N)
-    "$@" >/dev/null 2>&1 || status=$?
+    "$@" > "$out_file" 2>&1 || status=$?
     [ "$status" -eq 130 ] && kill -INT $$
     end_ns=$(date +%s%N)
+    
     printf "%s %s" "$status" "$(( (end_ns - start_ns) / 1000000 ))"
 }
 
@@ -103,18 +178,31 @@ throughput_str() {
     fi
 }
 
+strip_gpu_info() {
+    awk '
+        /\[gpu_info\]/ { skip = 1; next }
+        skip && /----/ { next }
+        skip && /Dev[[:space:]]+Name/ { next }
+        skip && /^[[:space:]]*[0-9]+[[:space:]]+/ { next }
+        skip && /^[[:space:]]*$/ { skip = 0; next }
+        skip { skip = 0 }
+        { print }
+    '
+}
+
 build_target() {
     local target="$1" ptxas_log="$2"
     mkdir -p "$BUILD_DIR"
-    cd "$BUILD_DIR"
-    cmake "$REPO_DIR" -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CUDA_FLAGS="-Xptxas -v --generate-line-info" \
-        >/dev/null 2>&1
-    
-    rm -f "$target"
-    
-    make -j"$(num_cpus)" "$target" 2>"$ptxas_log.raw" >/dev/null || { cat "$ptxas_log.raw" >&2; return 1; }
-    grep -E "ptxas info:|Used [0-9]+ registers|lmem|smem|cmem" "$ptxas_log.raw" > "$ptxas_log" || true
+    (
+        cd "$BUILD_DIR"
+        cmake "$REPO_DIR" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CUDA_FLAGS="-Xptxas -v --generate-line-info" \
+            >/dev/null 2>&1
+        rm -f "$target"
+        make -j"$(num_cpus)" "$target" 2>"$ptxas_log.raw" >/dev/null || { cat "$ptxas_log.raw" >&2; exit 1; }
+        grep -E "ptxas info:|Used [0-9]+ registers|lmem|smem|cmem" "$ptxas_log.raw" > "$ptxas_log" || true
+        rm -f "$ptxas_log.raw"
+    )
 }
 
 count_code_lines_awk() {
@@ -230,7 +318,6 @@ ptx_analysis() {
     [ -f "$ptx_file" ] || { echo "  ptx_file=missing"; return; }
 
     local ptx_bytes ptx_lines ptx_instr_lines
-    ptx_bytes=$(     awk 'END{print FILENAME}' /dev/null; wc -c < "$ptx_file" | tr -d ' ')
     ptx_bytes=$(     wc -c < "$ptx_file" | tr -d ' ')
     ptx_lines=$(     awk 'END{print NR}' "$ptx_file")
     ptx_instr_lines=$(awk '
@@ -255,6 +342,8 @@ ptx_analysis() {
     printf "  ptx_instruction_lines=%s\n" "$ptx_instr_lines"
     printf "  ptx_kernel_entries=%s\n"    "$n_entries"
     printf "  ptx_device_funcs=%s\n"      "$n_device_funcs"
+
+    rm -f "$ptx_file"
 }
 
 cubin_analysis() {
@@ -369,13 +458,18 @@ nsys_run() {
 
     local status=0
     nsys profile \
-        --stats=true \
         --trace=cuda \
         --force-overwrite=true \
         -o "$out" \
-        "$binary" "$@" > "${out}.txt" 2>&1 || status=$?
-        
-    [ "$status" -eq 130 ] && kill -INT $$
+        "$binary" "$@" >/dev/null 2>&1 || status=$?
+
+    [ "$status" -eq 130 ] && { kill -INT $$; return; }
+
+    nsys stats \
+        --force-export=true \
+        --report cudaapisum,gpukernsum,gpumemtimesum,gpumemsizesum \
+        --format csv \
+        "${out}.nsys-rep" > "${out}.txt" 2>/dev/null || true
 
     echo "${out}.txt"
 }
@@ -383,13 +477,51 @@ nsys_run() {
 parse_nsys() {
     local txt="$1"
     [ ! -f "$txt" ] && { echo "    nsys_log=missing"; return; }
+    [ ! -s "$txt" ] && { echo "    nsys stats failed or generated empty report"; return; }
 
-    awk '
-        /CUDA GPU Kernel Summary/ { flag = 1; print "    [Kernel Time Complexity]"; next }
-        flag && /^$/ { count++ }
-        flag && count >= 1 { flag = 0; next }
-        flag { print "    " $0 }
-    ' "$txt"
+    python3 - "$txt" << 'EOF'
+import csv, sys
+
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8-sig') as f:
+        reader = csv.reader(f)
+        current_section = "Report"
+        name_idx, val_idx = -1, -1
+        val_header = ""
+
+        for row in reader:
+            if not row:
+                continue
+                
+            if len(row) == 1:
+                current_section = row[0].strip('": \n\r')
+                name_idx, val_idx = -1, -1
+                continue
+
+            if any("Total Time" in c or "Duration" in c or "Total (" in c for c in row):
+                name_idx = next((i for i, c in enumerate(row) if "Name" in c or "Operation" in c), -1)
+                val_idx = next((i for i, c in enumerate(row) if "Total Time" in c or "Duration" in c or "Total (" in c), -1)
+                if val_idx != -1:
+                    val_header = row[val_idx].strip()
+                continue
+
+            if name_idx != -1 and val_idx != -1 and len(row) > max(name_idx, val_idx):
+                name = str(row[name_idx]).strip("\"'\n\r ")
+                val = str(row[val_idx]).strip("\"'\n\r ")
+
+                if name and val and "Processing" not in name and "WARNING" not in name:
+                    tag = "API"
+                    if "Kernel" in current_section: tag = "Kernel"
+                    elif "Memory Operation Time" in current_section: tag = "Mem Time"
+                    elif "Memory Operation Size" in current_section: tag = "Mem Size"
+                    short_name = (name[:45] + "...") if len(name) > 45 else name
+                    if "Time" in val_header or "Duration" in val_header:
+                        print(f"    [{tag:<8}] {short_name:<48} | {val_header}: {val} ns")
+                    else:
+                        print(f"    [{tag:<8}] {short_name:<48} | {val_header}: {val}")
+except Exception as e:
+    print(f"    [CSV Parse Error: {e}]")
+EOF
 }
 
 static_analysis_cipher() {
@@ -436,6 +568,8 @@ static_analysis_cipher() {
 
                 cubin_analysis "$cipher" "$BUILD_DIR/$probe_target"
                 echo ""
+
+                rm -f "$ptxas_log"
             fi
         fi
 
@@ -454,6 +588,12 @@ run_test() {
 
     if ! build_target "$target" "$ptxas_log"; then
         echo "build_failed cipher=$cipher mode=$mode" | tee "$results_file"
+        return 1
+    fi
+
+    if [ ! -f "$BUILD_DIR/$target" ]; then
+        echo "binary_missing cipher=$cipher mode=$mode path=$BUILD_DIR/$target" | tee -a "$results_file"
+        ls -la "$BUILD_DIR/" >> "$results_file" 2>&1 || true
         return 1
     fi
 
@@ -481,75 +621,141 @@ run_test() {
 
     } > "$results_file"
 
+    rm -f "$ptxas_log"
+
     echo "[results cipher=$cipher mode=$mode]" >> "$results_file"
-    printf "%-42s  %-6s  %-8s  %-12s  %-8s  %-12s  %s\n" \
-        "file" "status" "enc_ms" "enc_tput" "dec_ms" "dec_tput" "verify" \
-        >> "$results_file"
+    printf "%-42s  %-6s  %-12s  %-12s  %-12s  %-12s  %s\n" \
+    "file" "status" "enc_time" "enc_tput" "dec_time" "dec_tput" "verify" \
+    >> "$results_file"
+
+    local gpu_info_written=false
 
     for plaintext_path in $(get_plaintext_files); do
         local plaintext_file
         plaintext_file=$(basename "$plaintext_path")
         local file_bytes
         file_bytes=$(wc -c < "$plaintext_path" | tr -d ' ')
-
-        local key_iv
-        if [ -n "$OVERRIDE_KEY" ] || [ -n "$OVERRIDE_IV" ]; then
-            key_iv="${OVERRIDE_KEY:-00000000000000000000}:${OVERRIDE_IV:-0}"
-        else
-            key_iv="${DEFAULT_KEY_IV[$plaintext_file]:-00000000000000000000:0}"
-        fi
-        local key iv
-        IFS=':' read -r key iv <<< "$key_iv"
-
-        local test_name="${plaintext_file}_key_${key:0:4}_${key: -4}"
-        local encrypted_file="$output_dir/${test_name}.enc"
-        local decrypted_file="$output_dir/${test_name}.dec"
-
-        local enc_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "$encrypted_file")
-        local dec_cmd=("$BUILD_DIR/$target" "-d" "$encrypted_file"  "$key" "$iv" "$decrypted_file")
+        while IFS= read -r key_iv_entry; do
+            [ -z "$key_iv_entry" ] && continue
         
-        local enc_nsys_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "${encrypted_file}.nsys_tmp")
-        if [ "$mode" = "ctr" ]; then
-            enc_cmd+=("--nopad")
-            dec_cmd+=("--nopad")
-            enc_nsys_cmd+=("--nopad")
-        fi
+            local key_name key iv
+            IFS=':' read -r key_name key iv <<< "$key_iv_entry"
+        
+            local test_name="${plaintext_file}_${key_name}"
+            local display_name="${plaintext_file}[$key_name]"
+            local encrypted_file="$output_dir/${test_name}.enc"
+            local decrypted_file="$output_dir/${test_name}.dec"
+        # local key_iv
+        # if [ -n "$OVERRIDE_KEY" ] || [ -n "$OVERRIDE_IV" ]; then
+        #     key_iv="${OVERRIDE_KEY:-00000000000000000000}:${OVERRIDE_IV:-0}"
+        # else
+        #     key_iv="${DEFAULT_KEY_IV[$plaintext_file]:-00000000000000000000:0}"
+        # fi
+        # local key iv
+        # IFS=':' read -r key iv <<< "$key_iv"
 
-        local enc_result enc_status enc_ms
-        enc_result=$(time_command "${enc_cmd[@]}")
-        enc_status=${enc_result%% *}; enc_ms=${enc_result#* }
-        if [ "$enc_status" -ne 0 ]; then
-            printf "%-42s  FAIL    enc_failed\n" "$plaintext_file" | tee -a "$results_file"
-            continue
-        fi
-        local enc_tput; enc_tput=$(throughput_str "$file_bytes" "$enc_ms")
-
-        local dec_result dec_status dec_ms
-        dec_result=$(time_command "${dec_cmd[@]}")
-        dec_status=${dec_result%% *}; dec_ms=${dec_result#* }
-        if [ "$dec_status" -ne 0 ]; then
-            printf "%-42s  FAIL    dec_failed\n" "$plaintext_file" | tee -a "$results_file"
-            continue
-        fi
-        local dec_tput; dec_tput=$(throughput_str "$file_bytes" "$dec_ms")
-
-        local verify="PASS"
-        cmp -s "$decrypted_file" "$plaintext_path" || verify="FAIL"
-
-        printf "%-42s  PASS    %-8s  %-12s  %-8s  %-12s  %s\n" \
-            "$plaintext_file" "$enc_ms" "$enc_tput" "$dec_ms" "$dec_tput" "$verify" \
-            | tee -a "$results_file"
-
-        if [ "$PROFILE" = true ]; then
-            local nsys_log
-            nsys_log=$(nsys_run "${enc_nsys_cmd[0]}" "${test_name}_enc" "$output_dir" "${enc_nsys_cmd[@]:1}")
-            if [ -n "$nsys_log" ]; then
+        # local test_name="${plaintext_file}_key_${key:0:4}_${key: -4}"
+    
+            local enc_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "$encrypted_file")
+            local dec_cmd=("$BUILD_DIR/$target" "-d" "$encrypted_file"  "$key" "$iv" "$decrypted_file")
+            
+            local enc_nsys_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "${encrypted_file}.nsys_tmp")
+            if [ "$mode" = "ctr" ]; then
+                enc_cmd+=("--nopad")
+                dec_cmd+=("--nopad")
+                enc_nsys_cmd+=("--nopad")
+            fi
+    
+            local enc_stdout_file="$output_dir/${test_name}.enc.out"
+            local enc_result enc_status enc_ms
+            enc_result=$(time_command "$enc_stdout_file" "${enc_cmd[@]}")
+            enc_status=${enc_result%% *}; enc_ms=${enc_result#* }
+            if [ "$enc_status" -ne 0 ]; then
                 {
-                    printf "  [nsys file=%s op=encrypt]\n" "$plaintext_file"
-                    parse_nsys "$nsys_log"
+                    printf "%-42s  FAIL    enc_failed (exit=%s)\n" "$plaintext_file" "$enc_status"
+                    printf "  binary=%s  exists=%s  executable=%s\n" \
+                        "$BUILD_DIR/$target" \
+                        "$([ -f "$BUILD_DIR/$target" ] && echo yes || echo no)" \
+                        "$([ -x "$BUILD_DIR/$target" ] && echo yes || echo no)"
+                    if [ -s "$enc_stdout_file" ]; then
+                        printf "  [cuda_output op=encrypt]\n"
+                        strip_gpu_info < "$enc_stdout_file" | sed 's/^/    /'
+                    else
+                        printf "  [cuda_output op=encrypt] (empty)\n"
+                    fi
+                } | tee -a "$results_file"
+                rm -f "$enc_stdout_file"
+                continue
+            fi
+            local enc_tput; enc_tput=$(throughput_str "$file_bytes" "$enc_ms")
+    
+            if [ "$gpu_info_written" = false ] && [ -s "$enc_stdout_file" ]; then
+                local gpu_block
+                gpu_block=$(awk '
+                    /\[gpu_info\]/ { in_block=1 }
+                    in_block { print }
+                    in_block && /^[[:space:]]*[0-9]+[[:space:]]+/ { in_block=0 }
+                ' "$enc_stdout_file")
+                if [ -n "$gpu_block" ]; then
+                    printf "%s\n\n" "$gpu_block" >> "$results_file"
+                fi
+                gpu_info_written=true
+            fi
+    
+            local dec_stdout_file="$output_dir/${test_name}.dec.out"
+            local dec_result dec_status dec_ms
+            dec_result=$(time_command "$dec_stdout_file" "${dec_cmd[@]}")
+            dec_status=${dec_result%% *}; dec_ms=${dec_result#* }
+            if [ "$dec_status" -ne 0 ]; then
+                {
+                    printf "%-42s  FAIL    dec_failed\n" "$plaintext_file"
+                    if [ -s "$dec_stdout_file" ]; then
+                        printf "  [cuda_output op=decrypt]\n"
+                        strip_gpu_info < "$dec_stdout_file" | sed 's/^/    /'
+                    fi
+                } | tee -a "$results_file"
+                rm -f "$encrypted_file" "$enc_stdout_file" "$dec_stdout_file"
+                continue
+            fi
+            local dec_tput; dec_tput=$(throughput_str "$file_bytes" "$dec_ms")
+    
+            local verify="PASS"
+            cmp -s "$decrypted_file" "$plaintext_path" || verify="FAIL"
+    
+            printf "%-42s  PASS    %-12s  %-12s  %-12s  %-12s  %s\n" \
+    "$display_name" "${enc_ms} ms" "$enc_tput" "${dec_ms} ms" "$dec_tput" "$verify" \
+    | tee -a "$results_file"
+    
+            if [ -s "$enc_stdout_file" ] || [ -s "$dec_stdout_file" ]; then
+                {
+                    if [ -s "$enc_stdout_file" ]; then
+                        printf "  [cuda_output op=encrypt file=%s]\n" "$plaintext_file"
+                        strip_gpu_info < "$enc_stdout_file" | sed 's/^/    /'
+                    fi
+                    if [ -s "$dec_stdout_file" ]; then
+                        printf "  [cuda_output op=decrypt file=%s]\n" "$plaintext_file"
+                        strip_gpu_info < "$dec_stdout_file" | sed 's/^/    /'
+                    fi
                 } >> "$results_file"
             fi
-        fi
+    
+            rm -f "$encrypted_file" "$decrypted_file" "$enc_stdout_file" "$dec_stdout_file"
+    
+            if [ "$PROFILE" = true ]; then
+                local nsys_log
+                nsys_log=$(nsys_run "${enc_nsys_cmd[0]}" "${test_name}_enc" "$output_dir" "${enc_nsys_cmd[@]:1}")
+                rm -f "${encrypted_file}.nsys_tmp"
+                if [ -n "$nsys_log" ]; then
+                    {
+                        printf "  [nsys file=%s op=encrypt]\n" "$plaintext_file"
+                        parse_nsys "$nsys_log"
+                    } >> "$results_file"
+                    local nsys_base="${nsys_log%.txt}"
+                    rm -f "$nsys_log" "${nsys_base}.nsys-rep" "${nsys_base}.sqlite"
+                fi
+            fi
+            
+            done < <(get_selected_key_ivs "$cipher")
     done
 
     echo "" >> "$results_file"
