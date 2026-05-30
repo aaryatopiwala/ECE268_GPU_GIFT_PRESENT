@@ -26,7 +26,7 @@ STATIC_ONLY=false
 NO_STATIC=false
 CLEAN_BUILD=false
 
-HAS_NCU=false
+HAS_NSYS=false
 HAS_CUOBJDUMP=false
 HAS_CLOC=false
 
@@ -39,7 +39,7 @@ Options:
   --mode <ctr|cbc|all>             Specify the block cipher mode of operation.
   --key <hex>                      Override the default encryption key.
   --iv <hex>                       Override the default initialization vector.
-  --profile                        Run Nsight Compute (ncu) to collect hardware metrics.
+  --profile                        Run Nsight Systems (nsys) to collect kernel execution times.
   --static-only                    Skip encryption tests and only generate source/PTX/CUBIN metrics.
   --no-static                      Skip source/PTX/CUBIN metrics and only run encryption tests.
   --clean                          Remove the build directory before compiling.
@@ -67,7 +67,7 @@ if [ "$CLEAN_BUILD" = true ] && [ -d "$BUILD_DIR" ]; then
     find "$BUILD_DIR" -mindepth 1 -delete 2>/dev/null || true
 fi
 
-command -v ncu       &>/dev/null && HAS_NCU=true       || true
+command -v nsys      &>/dev/null && HAS_NSYS=true      || true
 command -v cuobjdump &>/dev/null && HAS_CUOBJDUMP=true || true
 command -v cloc      &>/dev/null && HAS_CLOC=true      || true
 
@@ -362,49 +362,34 @@ constant_mem_layout() {
     ' "${kernel_files[@]}"
 }
 
-ncu_run() {
+nsys_run() {
     local binary="$1" label="$2" out_dir="$3"; shift 3
-    local out="${out_dir}/ncu_${label}"
-    [ "$HAS_NCU" = false ] && { echo ""; return; }
-
-    local metrics="launch__registers_per_thread,\
-launch__shared_mem_per_block_static,\
-launch__shared_mem_per_block_dynamic,\
-sm__warps_active.avg.pct_of_peak_sustained_active,\
-gpu__time_duration.sum,\
-lts__t_sectors_srcunit_tex_op_read.sum"
+    local out="${out_dir}/nsys_${label}"
+    [ "$HAS_NSYS" = false ] && { echo ""; return; }
 
     local status=0
-    ncu \
-        --metrics "$metrics" \
-        --log-file "${out}.txt" \
-        --export "${out}.ncu-rep" \
-        -f \
-        "$binary" "$@" >/dev/null || status=$?
+    nsys profile \
+        --stats=true \
+        --trace=cuda \
+        --force-overwrite=true \
+        -o "$out" \
+        "$binary" "$@" > "${out}.txt" 2>&1 || status=$?
         
     [ "$status" -eq 130 ] && kill -INT $$
 
     echo "${out}.txt"
 }
 
-parse_ncu() {
+parse_nsys() {
     local txt="$1"
-    [ ! -f "$txt" ] && { echo "    ncu_log=missing"; return; }
+    [ ! -f "$txt" ] && { echo "    nsys_log=missing"; return; }
 
-    local regs smem_s smem_d occ dur tex
-    regs=$(  grep -i "launch__registers_per_thread"           "$txt" | awk '{print $NF}' | head -1 || true)
-    smem_s=$(grep -i "launch__shared_mem_per_block_static"    "$txt" | awk '{print $NF}' | head -1 || true)
-    smem_d=$(grep -i "launch__shared_mem_per_block_dynamic"   "$txt" | awk '{print $NF}' | head -1 || true)
-    occ=$(   grep -i "sm__warps_active.avg.pct"               "$txt" | awk '{print $NF}' | head -1 || true)
-    dur=$(   grep -i "gpu__time_duration.sum"                 "$txt" | awk '{print $NF, $(NF-1)}' | head -1 || true)
-    tex=$(   grep -i "lts__t_sectors_srcunit_tex_op_read.sum" "$txt" | awk '{print $NF}' | head -1 || true)
-
-    printf "    registers_per_thread=%s\n" "${regs:-?}"
-    printf "    smem_static_bytes=%s\n"    "${smem_s:-?}"
-    printf "    smem_dynamic_bytes=%s\n"   "${smem_d:-?}"
-    printf "    occupancy_pct=%s\n"        "${occ:-?}"
-    printf "    gpu_kernel_duration=%s\n"  "${dur:-?}"
-    printf "    const_mem_tex_reads=%s\n"  "${tex:-?}"
+    awk '
+        /CUDA GPU Kernel Summary/ { flag = 1; print "    [Kernel Time Complexity]"; next }
+        flag && /^$/ { count++ }
+        flag && count >= 1 { flag = 0; next }
+        flag { print "    " $0 }
+    ' "$txt"
 }
 
 static_analysis_cipher() {
@@ -523,11 +508,11 @@ run_test() {
         local enc_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "$encrypted_file")
         local dec_cmd=("$BUILD_DIR/$target" "-d" "$encrypted_file"  "$key" "$iv" "$decrypted_file")
         
-        local enc_ncu_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "${encrypted_file}.ncu_tmp")
+        local enc_nsys_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "${encrypted_file}.nsys_tmp")
         if [ "$mode" = "ctr" ]; then
             enc_cmd+=("--nopad")
             dec_cmd+=("--nopad")
-            enc_ncu_cmd+=("--nopad")
+            enc_nsys_cmd+=("--nopad")
         fi
 
         local enc_result enc_status enc_ms
@@ -556,12 +541,12 @@ run_test() {
             | tee -a "$results_file"
 
         if [ "$PROFILE" = true ]; then
-            local ncu_log
-            ncu_log=$(ncu_run "${enc_ncu_cmd[0]}" "${test_name}_enc" "$output_dir" "${enc_ncu_cmd[@]:1}")
-            if [ -n "$ncu_log" ]; then
+            local nsys_log
+            nsys_log=$(nsys_run "${enc_nsys_cmd[0]}" "${test_name}_enc" "$output_dir" "${enc_nsys_cmd[@]:1}")
+            if [ -n "$nsys_log" ]; then
                 {
-                    printf "  [ncu file=%s op=encrypt]\n" "$plaintext_file"
-                    parse_ncu "$ncu_log"
+                    printf "  [nsys file=%s op=encrypt]\n" "$plaintext_file"
+                    parse_nsys "$nsys_log"
                 } >> "$results_file"
             fi
         fi
