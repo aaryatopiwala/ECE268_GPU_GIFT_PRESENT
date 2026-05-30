@@ -62,9 +62,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ "$CLEAN_BUILD" = true ]; then
+if [ "$CLEAN_BUILD" = true ] && [ -d "$BUILD_DIR" ]; then
     echo "Cleaning build directory..."
-    rm -rf "$BUILD_DIR"
+    find "$BUILD_DIR" -mindepth 1 -delete 2>/dev/null || true
 fi
 
 command -v ncu       &>/dev/null && HAS_NCU=true       || true
@@ -85,6 +85,7 @@ time_command() {
     local start_ns end_ns status=0
     start_ns=$(date +%s%N)
     "$@" >/dev/null 2>&1 || status=$?
+    [ "$status" -eq 130 ] && kill -INT $$
     end_ns=$(date +%s%N)
     printf "%s %s" "$status" "$(( (end_ns - start_ns) / 1000000 ))"
 }
@@ -373,12 +374,15 @@ sm__warps_active.avg.pct_of_peak_sustained_active,\
 gpu__time_duration.sum,\
 lts__t_sectors_srcunit_tex_op_read.sum"
 
+    local status=0
     ncu \
         --metrics "$metrics" \
         --log-file "${out}.txt" \
         --export "${out}.ncu-rep" \
         -f \
-        "$binary" "$@" >/dev/null || true
+        "$binary" "$@" >/dev/null || status=$?
+        
+    [ "$status" -eq 130 ] && kill -INT $$
 
     echo "${out}.txt"
 }
@@ -388,12 +392,12 @@ parse_ncu() {
     [ ! -f "$txt" ] && { echo "    ncu_log=missing"; return; }
 
     local regs smem_s smem_d occ dur tex
-    regs=$(  grep -i "launch__registers_per_thread"           "$txt" | awk '{print $NF}' | head -1)
-    smem_s=$(grep -i "launch__shared_mem_per_block_static"    "$txt" | awk '{print $NF}' | head -1)
-    smem_d=$(grep -i "launch__shared_mem_per_block_dynamic"   "$txt" | awk '{print $NF}' | head -1)
-    occ=$(   grep -i "sm__warps_active.avg.pct"               "$txt" | awk '{print $NF}' | head -1)
-    dur=$(   grep -i "gpu__time_duration.sum"                 "$txt" | awk '{print $NF, $(NF-1)}' | head -1)
-    tex=$(   grep -i "lts__t_sectors_srcunit_tex_op_read.sum" "$txt" | awk '{print $NF}' | head -1)
+    regs=$(  grep -i "launch__registers_per_thread"           "$txt" | awk '{print $NF}' | head -1 || true)
+    smem_s=$(grep -i "launch__shared_mem_per_block_static"    "$txt" | awk '{print $NF}' | head -1 || true)
+    smem_d=$(grep -i "launch__shared_mem_per_block_dynamic"   "$txt" | awk '{print $NF}' | head -1 || true)
+    occ=$(   grep -i "sm__warps_active.avg.pct"               "$txt" | awk '{print $NF}' | head -1 || true)
+    dur=$(   grep -i "gpu__time_duration.sum"                 "$txt" | awk '{print $NF, $(NF-1)}' | head -1 || true)
+    tex=$(   grep -i "lts__t_sectors_srcunit_tex_op_read.sum" "$txt" | awk '{print $NF}' | head -1 || true)
 
     printf "    registers_per_thread=%s\n" "${regs:-?}"
     printf "    smem_static_bytes=%s\n"    "${smem_s:-?}"
