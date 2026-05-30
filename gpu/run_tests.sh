@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trap 'echo -e "\nExecution aborted by user."; exit 130' SIGINT SIGTERM
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTS_DIR="$REPO_DIR/../tests"
 RUNS_DIR="$REPO_DIR/../runs"
