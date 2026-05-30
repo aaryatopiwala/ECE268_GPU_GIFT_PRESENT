@@ -82,9 +82,9 @@ get_plaintext_files() {
 }
 
 time_command() {
-    local start_ns end_ns status=0
+    local start_ns end_ns status=0 out_file="$1"; shift
     start_ns=$(date +%s%N)
-    "$@" >/dev/null 2>&1 || status=$?
+    "$@" >"$out_file" 2>&1 || status=$?
     [ "$status" -eq 130 ] && kill -INT $$
     end_ns=$(date +%s%N)
     printf "%s %s" "$status" "$(( (end_ns - start_ns) / 1000000 ))"
@@ -115,6 +115,7 @@ build_target() {
     
     make -j"$(num_cpus)" "$target" 2>"$ptxas_log.raw" >/dev/null || { cat "$ptxas_log.raw" >&2; return 1; }
     grep -E "ptxas info:|Used [0-9]+ registers|lmem|smem|cmem" "$ptxas_log.raw" > "$ptxas_log" || true
+    rm -f "$ptxas_log.raw"
 }
 
 count_code_lines_awk() {
@@ -255,6 +256,8 @@ ptx_analysis() {
     printf "  ptx_instruction_lines=%s\n" "$ptx_instr_lines"
     printf "  ptx_kernel_entries=%s\n"    "$n_entries"
     printf "  ptx_device_funcs=%s\n"      "$n_device_funcs"
+
+    rm -f "$ptx_file"
 }
 
 cubin_analysis() {
@@ -481,6 +484,8 @@ run_test() {
 
     } > "$results_file"
 
+    rm -f "$ptxas_log"
+
     echo "[results cipher=$cipher mode=$mode]" >> "$results_file"
     printf "%-42s  %-6s  %-8s  %-12s  %-8s  %-12s  %s\n" \
         "file" "status" "enc_ms" "enc_tput" "dec_ms" "dec_tput" "verify" \
@@ -504,11 +509,16 @@ run_test() {
         local test_name="${plaintext_file}_key_${key:0:4}_${key: -4}"
         local encrypted_file="$output_dir/${test_name}.enc"
         local decrypted_file="$output_dir/${test_name}.dec"
+        local enc_stdout="$output_dir/${test_name}.enc.out"
+        local dec_stdout="$output_dir/${test_name}.dec.out"
 
         local enc_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "$encrypted_file")
         local dec_cmd=("$BUILD_DIR/$target" "-d" "$encrypted_file"  "$key" "$iv" "$decrypted_file")
-        
-        local enc_nsys_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "${encrypted_file}.nsys_tmp")
+
+        local nsys_enc_out="$output_dir/${test_name}_enc"
+        local nsys_enc_tmp="${nsys_enc_out}.enc_tmp"
+        local enc_nsys_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "$nsys_enc_tmp")
+
         if [ "$mode" = "ctr" ]; then
             enc_cmd+=("--nopad")
             dec_cmd+=("--nopad")
@@ -516,19 +526,37 @@ run_test() {
         fi
 
         local enc_result enc_status enc_ms
-        enc_result=$(time_command "${enc_cmd[@]}")
+        enc_result=$(time_command "$enc_stdout" "${enc_cmd[@]}")
         enc_status=${enc_result%% *}; enc_ms=${enc_result#* }
         if [ "$enc_status" -ne 0 ]; then
-            printf "%-42s  FAIL    enc_failed\n" "$plaintext_file" | tee -a "$results_file"
+            {
+                printf "%-42s  FAIL    enc_failed\n" "$plaintext_file"
+                if [ -s "$enc_stdout" ]; then
+                    printf "  [enc_output file=%s]\n" "$plaintext_file"
+                    sed 's/^/    /' "$enc_stdout"
+                fi
+            } >> "$results_file"
+            rm -f "$enc_stdout" "$encrypted_file"
             continue
         fi
         local enc_tput; enc_tput=$(throughput_str "$file_bytes" "$enc_ms")
 
         local dec_result dec_status dec_ms
-        dec_result=$(time_command "${dec_cmd[@]}")
+        dec_result=$(time_command "$dec_stdout" "${dec_cmd[@]}")
         dec_status=${dec_result%% *}; dec_ms=${dec_result#* }
         if [ "$dec_status" -ne 0 ]; then
-            printf "%-42s  FAIL    dec_failed\n" "$plaintext_file" | tee -a "$results_file"
+            {
+                printf "%-42s  FAIL    dec_failed\n" "$plaintext_file"
+                if [ -s "$enc_stdout" ]; then
+                    printf "  [enc_output file=%s]\n" "$plaintext_file"
+                    sed 's/^/    /' "$enc_stdout"
+                fi
+                if [ -s "$dec_stdout" ]; then
+                    printf "  [dec_output file=%s]\n" "$plaintext_file"
+                    sed 's/^/    /' "$dec_stdout"
+                fi
+            } >> "$results_file"
+            rm -f "$enc_stdout" "$dec_stdout" "$encrypted_file" "$decrypted_file"
             continue
         fi
         local dec_tput; dec_tput=$(throughput_str "$file_bytes" "$dec_ms")
@@ -536,9 +564,21 @@ run_test() {
         local verify="PASS"
         cmp -s "$decrypted_file" "$plaintext_path" || verify="FAIL"
 
-        printf "%-42s  PASS    %-8s  %-12s  %-8s  %-12s  %s\n" \
-            "$plaintext_file" "$enc_ms" "$enc_tput" "$dec_ms" "$dec_tput" "$verify" \
-            | tee -a "$results_file"
+        {
+            printf "%-42s  PASS    %-8s  %-12s  %-8s  %-12s  %s\n" \
+                "$plaintext_file" "$enc_ms" "$enc_tput" "$dec_ms" "$dec_tput" "$verify"
+
+            if [ -s "$enc_stdout" ]; then
+                printf "  [enc_output file=%s]\n" "$plaintext_file"
+                sed 's/^/    /' "$enc_stdout"
+            fi
+            if [ -s "$dec_stdout" ]; then
+                printf "  [dec_output file=%s]\n" "$plaintext_file"
+                sed 's/^/    /' "$dec_stdout"
+            fi
+        } >> "$results_file"
+
+        rm -f "$enc_stdout" "$dec_stdout" "$encrypted_file" "$decrypted_file"
 
         if [ "$PROFILE" = true ]; then
             local nsys_log
@@ -548,6 +588,10 @@ run_test() {
                     printf "  [nsys file=%s op=encrypt]\n" "$plaintext_file"
                     parse_nsys "$nsys_log"
                 } >> "$results_file"
+                rm -f "$nsys_log" \
+                    "${nsys_enc_out}.nsys-rep" \
+                    "${nsys_enc_out}.qdstrm" \
+                    "$nsys_enc_tmp"
             fi
         fi
     done
