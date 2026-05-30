@@ -33,15 +33,15 @@ usage() {
 Usage: $0 [options]
 
 Options:
-  --cipher <present|gift|aes|all>
-  --mode <ctr|cbc|all>
-  --key <hex>
-  --iv <hex>
-  --profile
-  --static-only
-  --no-static
-  --clean
-  --help
+  --cipher <present|gift|aes|all>  Specify the target cipher algorithm.
+  --mode <ctr|cbc|all>             Specify the block cipher mode of operation.
+  --key <hex>                      Override the default encryption key.
+  --iv <hex>                       Override the default initialization vector.
+  --profile                        Run Nsight Compute (ncu) to collect hardware metrics.
+  --static-only                    Skip encryption tests and only generate source/PTX/CUBIN metrics.
+  --no-static                      Skip source/PTX/CUBIN metrics and only run encryption tests.
+  --clean                          Remove the build directory before compiling.
+  --help|-h                        Show this help message.
 EOF
 }
 
@@ -107,6 +107,7 @@ build_target() {
     cmake "$REPO_DIR" -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_FLAGS="-Xptxas -v --generate-line-info" \
         >/dev/null 2>&1
+    
     rm -f "$target"
     
     make -j"$(num_cpus)" "$target" 2>"$ptxas_log.raw" >/dev/null || { cat "$ptxas_log.raw" >&2; return 1; }
@@ -374,8 +375,8 @@ lts__t_sectors_srcunit_tex_op_read.sum"
         --metrics "$metrics" \
         --log-file "${out}.txt" \
         --export "${out}.ncu-rep" \
-        --force-overwrite \
-        "$binary" "$@" >/dev/null 2>&1 || true
+        -f \
+        "$binary" "$@" >/dev/null || true
 
     echo "${out}.txt"
 }
@@ -515,7 +516,13 @@ run_test() {
 
         local enc_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "$encrypted_file")
         local dec_cmd=("$BUILD_DIR/$target" "-d" "$encrypted_file"  "$key" "$iv" "$decrypted_file")
-        [ "$mode" = "ctr" ] && { enc_cmd+=("--nopad"); dec_cmd+=("--nopad"); }
+        
+        local enc_ncu_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "${encrypted_file}.ncu_tmp")
+        if [ "$mode" = "ctr" ]; then
+            enc_cmd+=("--nopad")
+            dec_cmd+=("--nopad")
+            enc_ncu_cmd+=("--nopad")
+        fi
 
         local enc_result enc_status enc_ms
         enc_result=$(time_command "${enc_cmd[@]}")
@@ -544,9 +551,7 @@ run_test() {
 
         if [ "$PROFILE" = true ]; then
             local ncu_log
-            ncu_log=$(ncu_run "$BUILD_DIR/$target" "${test_name}_enc" "$output_dir" \
-                "-e" "$plaintext_path" "$key" "$iv" "${encrypted_file}.ncu_tmp" \
-                $([ "$mode" = "ctr" ] && echo "--nopad" || true))
+            ncu_log=$(ncu_run "${enc_ncu_cmd[0]}" "${test_name}_enc" "$output_dir" "${enc_ncu_cmd[@]:1}")
             if [ -n "$ncu_log" ]; then
                 {
                     printf "  [ncu file=%s op=encrypt]\n" "$plaintext_file"
