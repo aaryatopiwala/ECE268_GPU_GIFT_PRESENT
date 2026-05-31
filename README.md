@@ -63,5 +63,4 @@ Pranav Mehta (A17323782), Aarya Topiwala (A17295542), Diyou (Dill) Wang (A171187
 ## Testing
 
 1. run ```run.sh``` in root directory or ```cd``` into subdirectories like ```gpu``` or ```cpu```
-2. Use ```gen_test_file.py``` in ```tests``` directory to generate more test files with difference sizes measured in MB.
-3. Use command ```python3 gen_test_file.py ouput --mb size``` to generate more test files.
+3. Use command ```python3 tests/gen_test_file.py ouput <--b|--kb|--mb|--gb> size``` to generate more test files with specified size and units.

@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 
-#Usage gen_test_file.py output --mb x
+# Usage: 
+# ./gen_test_file.py output --mb x
+# ./gen_test_file.py output --kb x
+# ./gen_test_file.py output --gb x
+# ./gen_test_file.py output --b x
 
 import argparse
 from pathlib import Path
 
-def generate_file(path: Path, size_mb: int):
-    total_bytes = size_mb * 1024 * 1024
+def generate_file(path: Path, total_bytes: int):
     chunk_size = 1024 * 1024
     
+    if total_bytes < chunk_size:
+        chunk_size = total_bytes if total_bytes > 0 else 1
+
     pattern = bytearray(chunk_size)
     x = 0x12345678
 
@@ -27,15 +33,34 @@ def generate_file(path: Path, size_mb: int):
             f.write(pattern[:n])
             written += n
 
-    print(f"Generated {path} ({total_bytes} bytes, {size_mb} MB)")
+    print(f"Generated {path} ({total_bytes} bytes)")
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Generate a test file with a pseudo-random pattern.")
     parser.add_argument("output", help="output file path")
-    parser.add_argument("--mb", type=int, default=128, help="file size in MB")
+
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--b", type=int, help="file size in Bytes")
+    group.add_argument("--kb", type=int, help="file size in KB")
+    group.add_argument("--mb", type=int, help="file size in MB")
+    group.add_argument("--gb", type=int, help="file size in GB")
+    
     args = parser.parse_args()
 
-    generate_file(Path(args.output), args.mb)
+    # Calculate total bytes based on the provided flag
+    if args.b is not None:
+        total_bytes = args.b
+    elif args.kb is not None:
+        total_bytes = args.kb * 1024
+    elif args.gb is not None:
+        total_bytes = args.gb * 1024 * 1024 * 1024
+    elif args.mb is not None:
+        total_bytes = args.mb * 1024 * 1024
+    else:
+        # Default behavior: 128 MB if no size argument is provided
+        total_bytes = 128 * 1024 * 1024
+
+    generate_file(Path(args.output), total_bytes)
 
 if __name__ == "__main__":
     main()
