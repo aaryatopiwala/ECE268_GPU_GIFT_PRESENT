@@ -62,5 +62,5 @@ Pranav Mehta (A17323782), Aarya Topiwala (A17295542), Diyou (Dill) Wang (A171187
 
 ## Testing
 
-1. run ```run.sh``` in root directory or ```cd``` into subdirectories like ```gpu``` or ```cpu```
-3. Use command ```python3 tests/gen_test_file.py ouput <--b|--kb|--mb|--gb> size``` to generate more test files with specified size and units.
+1. Run ```run.sh``` in root directory or ```cd``` into subdirectories like ```gpu``` or ```cpu```
+3. Run ```python3 tests/gen_test_file.py ouput <--b|--kb|--mb|--gb> size``` to generate more test files with specified size and units.
