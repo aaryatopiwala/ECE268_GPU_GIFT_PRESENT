@@ -19,13 +19,29 @@ make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
 Once compiled, you can run a specific cipher target directly from the build/ directory:
 
 ```bash
-# CBC Mode
-./present_cbc -e plain.txt <key> <iv> cipher.bin
-./present_cbc -d cipher.bin <key> <iv> plain.txt
+# PRESENT CBC Mode
+./build/present_cbc -e plain.txt <key> <iv> cipher.bin
+./build/present_cbc -d cipher.bin <key> <iv> plain.txt
 
-# CTR Mode (Requires the --nopad flag)
-./present_ctr -e plain.txt <key> <iv> cipher.bin --nopad
-./present_ctr -d cipher.bin <key> <iv> plain.txt --nopad
+# PRESENT CTR Mode (Requires the --nopad flag)
+./build/present_ctr -e plain.txt <key> <iv> cipher.bin --nopad
+./build/present_ctr -d cipher.bin <key> <iv> plain.txt --nopad
+
+# GIFT CBC Mode
+./build/gift_cbc -e plain.txt <key> <iv> cipher.bin
+./build/gift_cbc -d cipher.bin <key> <iv> plain.txt
+
+# GIFT CTR Mode (Requires the --nopad flag)
+./build/gift_ctr -e plain.txt <key> <iv> cipher.bin --nopad
+./build/gift_ctr -d cipher.bin <key> <iv> plain.txt --nopad
+
+# AES CBC Mode
+./build/aes_cbc -e plain.txt <key> <iv> cipher.bin
+./build/aes_cbc -d cipher.bin <key> <iv> plain.txt
+
+# AES CTR Mode (Requires the --nopad flag)
+./build/aes_ctr -e plain.txt <key> <iv> cipher.bin --nopad
+./build/aes_ctr -d cipher.bin <key> <iv> plain.txt --nopad
 ```
 
 ---
