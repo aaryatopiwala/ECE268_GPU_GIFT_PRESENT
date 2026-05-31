@@ -14,12 +14,6 @@ SUPPORTED_MODES=(ctr cbc)
 KEYSET="inc"
 SELECT_FILE=""
 
-declare -A DEFAULT_KEY_IV
-DEFAULT_KEY_IV=(
-    ["beemovie.txt"]="00000000000000000000:0"
-    ["moderntimes.mp4"]="00000000000000000000:0"
-)
-
 SELECT_CIPHER="all"
 SELECT_MODE="all"
 OVERRIDE_KEY=""
@@ -58,10 +52,8 @@ while [[ $# -gt 0 ]]; do
         --mode)        SELECT_MODE="${2,,}";   shift 2 ;;
         --key)         OVERRIDE_KEY="$2";     shift 2 ;;
         --iv)          OVERRIDE_IV="$2";      shift 2 ;;
-        --file)        SELECT_FILE="$2"; 
-shift 2 ;;
-        --keyset)      KEYSET="${2,,}";  
-shift 2 ;;
+        --file)        SELECT_FILE="$2"; shift 2 ;;
+        --keyset)      KEYSET="${2,,}";  shift 2 ;;
         --profile)     PROFILE=true;          shift   ;;
         --static-only) STATIC_ONLY=true;      shift   ;;
         --no-static)   NO_STATIC=true;        shift   ;;
@@ -91,11 +83,18 @@ should_test_cipher() { [ "$SELECT_CIPHER" = "all" ] || [ "$1" = "$SELECT_CIPHER"
 should_test_mode()   { [ "$SELECT_MODE"   = "all" ] || [ "$1" = "$SELECT_MODE"   ]; }
 num_cpus() { getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1; }
 
-# get_plaintext_files() {
-#     find "$TESTS_DIR" -maxdepth 1 -type f \
-#         \( -name "*.bin" -o -name "*.txt" -o -name "*.mp4" \) \
-#         ! -name "*de.*" | sort
-# }
+write_cpu_info() {
+    local outfile="$1"
+    echo "[cpu_info]" >> "$outfile"
+    if command -v lscpu >/dev/null 2>&1; then
+        lscpu | grep -iE 'model name|architecture|cpu mhz|L[123] cache' | sed 's/^/  /' >> "$outfile" || true
+    elif command -v sysctl >/dev/null 2>&1; then
+        sysctl -n machdep.cpu.brand_string 2>/dev/null | sed 's/^/  Model name: /' >> "$outfile" || true
+    else
+        uname -m | sed 's/^/  Architecture: /' >> "$outfile" || true
+    fi
+    echo "" >> "$outfile"
+}
 
 get_plaintext_files() {
     if [ -n "$SELECT_FILE" ]; then
@@ -109,7 +108,6 @@ get_plaintext_files() {
 
 get_key_ivs() {
     local cipher="$1"
-
     case "$cipher" in
         present)
             echo "zero:00000000000000000000:0"
@@ -126,32 +124,20 @@ get_key_ivs() {
 
 get_selected_key_ivs() {
     local cipher="$1"
-
     if [ -n "$OVERRIDE_KEY" ] || [ -n "$OVERRIDE_IV" ]; then
         case "$cipher" in
-            present)
-                echo "override:${OVERRIDE_KEY:-00000000000000000000}:${OVERRIDE_IV:-0}"
-                ;;
-            gift|aes)
-                echo "override:${OVERRIDE_KEY:-00000000000000000000000000000000}:${OVERRIDE_IV:-00000000000000000000000000000000}"
-                ;;
+            present) echo "override:${OVERRIDE_KEY:-00000000000000000000}:${OVERRIDE_IV:-0}" ;;
+            gift|aes) echo "override:${OVERRIDE_KEY:-00000000000000000000000000000000}:${OVERRIDE_IV:-00000000000000000000000000000000}" ;;
         esac
         return
     fi
-
     case "$KEYSET" in
-        all)
-            get_key_ivs "$cipher"
-            ;;
-        zero|inc|ff)
-            get_key_ivs "$cipher" | awk -F: -v k="$KEYSET" '$1 == k'
-            ;;
-        *)
-            echo "Unknown keyset: $KEYSET" >&2
-            exit 1
-            ;;
+        all) get_key_ivs "$cipher" ;;
+        zero|inc|ff) get_key_ivs "$cipher" | awk -F: -v k="$KEYSET" '$1 == k' ;;
+        *) echo "Unknown keyset: $KEYSET" >&2; exit 1 ;;
     esac
 }
+
 time_command() {
     local start_ns end_ns status=0
     local out_file="$1"
@@ -169,12 +155,9 @@ throughput_str() {
     local bytes="$1" ms="$2"
     [ "$ms" -le 0 ] && { echo "N/A"; return; }
     local bps=$(( bytes * 1000 / ms ))
-    if   [ "$bps" -ge $((1024*1024*1024)) ]; then
-        awk "BEGIN{printf \"%.2f GB/s\", $bps/1073741824}"
-    elif [ "$bps" -ge $((1024*1024)) ]; then
-        awk "BEGIN{printf \"%.2f MB/s\", $bps/1048576}"
-    else
-        awk "BEGIN{printf \"%.2f KB/s\", $bps/1024}"
+    if   [ "$bps" -ge $((1024*1024*1024)) ]; then awk "BEGIN{printf \"%.2f GB/s\", $bps/1073741824}"
+    elif [ "$bps" -ge $((1024*1024)) ]; then awk "BEGIN{printf \"%.2f MB/s\", $bps/1048576}"
+    else awk "BEGIN{printf \"%.2f KB/s\", $bps/1024}"
     fi
 }
 
@@ -602,7 +585,11 @@ run_test() {
         printf "binary=%s\n"           "$BUILD_DIR/$target"
         printf "timestamp=%s\n"        "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         printf "profile=%s\n\n"        "$PROFILE"
+    } > "$results_file"
 
+    write_cpu_info "$results_file"
+
+    {
         echo "[ptxas cipher=$cipher mode=$mode]"
         if [ -s "$ptxas_log" ]; then
             cat "$ptxas_log"
@@ -618,8 +605,7 @@ run_test() {
             *-ctr)       echo "  encrypt=parallel  decrypt=parallel" ;;
         esac
         echo ""
-
-    } > "$results_file"
+    } >> "$results_file"
 
     rm -f "$ptxas_log"
 
@@ -631,13 +617,11 @@ run_test() {
     local gpu_info_written=false
 
     for plaintext_path in $(get_plaintext_files); do
-        local plaintext_file
-        plaintext_file=$(basename "$plaintext_path")
-        local file_bytes
-        file_bytes=$(wc -c < "$plaintext_path" | tr -d ' ')
+        local plaintext_file=$(basename "$plaintext_path")
+        local file_bytes=$(wc -c < "$plaintext_path" | tr -d ' ')
+        
         while IFS= read -r key_iv_entry; do
             [ -z "$key_iv_entry" ] && continue
-        
             local key_name key iv
             IFS=':' read -r key_name key iv <<< "$key_iv_entry"
         
@@ -645,16 +629,6 @@ run_test() {
             local display_name="${plaintext_file}[$key_name]"
             local encrypted_file="$output_dir/${test_name}.enc"
             local decrypted_file="$output_dir/${test_name}.dec"
-        # local key_iv
-        # if [ -n "$OVERRIDE_KEY" ] || [ -n "$OVERRIDE_IV" ]; then
-        #     key_iv="${OVERRIDE_KEY:-00000000000000000000}:${OVERRIDE_IV:-0}"
-        # else
-        #     key_iv="${DEFAULT_KEY_IV[$plaintext_file]:-00000000000000000000:0}"
-        # fi
-        # local key iv
-        # IFS=':' read -r key iv <<< "$key_iv"
-
-        # local test_name="${plaintext_file}_key_${key:0:4}_${key: -4}"
     
             local enc_cmd=("$BUILD_DIR/$target" "-e" "$plaintext_path" "$key" "$iv" "$encrypted_file")
             local dec_cmd=("$BUILD_DIR/$target" "-d" "$encrypted_file"  "$key" "$iv" "$decrypted_file")
@@ -670,6 +644,7 @@ run_test() {
             local enc_result enc_status enc_ms
             enc_result=$(time_command "$enc_stdout_file" "${enc_cmd[@]}")
             enc_status=${enc_result%% *}; enc_ms=${enc_result#* }
+            
             if [ "$enc_status" -ne 0 ]; then
                 {
                     printf "%-42s  FAIL    enc_failed (exit=%s)\n" "$plaintext_file" "$enc_status"
@@ -706,6 +681,7 @@ run_test() {
             local dec_result dec_status dec_ms
             dec_result=$(time_command "$dec_stdout_file" "${dec_cmd[@]}")
             dec_status=${dec_result%% *}; dec_ms=${dec_result#* }
+            
             if [ "$dec_status" -ne 0 ]; then
                 {
                     printf "%-42s  FAIL    dec_failed\n" "$plaintext_file"
@@ -723,8 +699,8 @@ run_test() {
             cmp -s "$decrypted_file" "$plaintext_path" || verify="FAIL"
     
             printf "%-42s  PASS    %-12s  %-12s  %-12s  %-12s  %s\n" \
-    "$display_name" "${enc_ms} ms" "$enc_tput" "${dec_ms} ms" "$dec_tput" "$verify" \
-    | tee -a "$results_file"
+            "$display_name" "${enc_ms} ms" "$enc_tput" "${dec_ms} ms" "$dec_tput" "$verify" \
+            | tee -a "$results_file"
     
             if [ -s "$enc_stdout_file" ] || [ -s "$dec_stdout_file" ]; then
                 {
@@ -755,7 +731,7 @@ run_test() {
                 fi
             fi
             
-            done < <(get_selected_key_ivs "$cipher")
+        done < <(get_selected_key_ivs "$cipher")
     done
 
     echo "" >> "$results_file"

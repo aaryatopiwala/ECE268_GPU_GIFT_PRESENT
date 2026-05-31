@@ -6,11 +6,13 @@ This directory contains the CPU-based C++ implementations of the PRESENT, GIFT, 
 
 ### Building the Targets
 
-To manually build the CPU targets, navigate into the specific cipher's directory and run `make`:
+To manually build the CPU targets, create a build directory and use CMake:
 
 ```bash
-cd present
-make
+mkdir -p build
+cd build
+cmake ..
+make -j$(nproc)
 ```
 
 ### Running Ciphers Directly
@@ -19,12 +21,12 @@ Once compiled, you can run a specific cipher target directly from its directory:
 
 ```bash
 # CBC Mode
-./present_cbc -e plain.txt <key> <iv> cipher.bin
-./present_cbc -d cipher.bin <key> <iv> plain.txt
+./build/present_cbc -e plain.txt <key> <iv> cipher.bin
+./build/present_cbc -d cipher.bin <key> <iv> plain.txt
 
 # CTR Mode (Requires the --nopad flag)
-./present_ctr -e plain.txt <key> <iv> cipher.bin --nopad
-./present_ctr -d cipher.bin <key> <iv> plain.txt --nopad
+./build/present_ctr -e plain.txt <key> <iv> cipher.bin --nopad
+./build/present_ctr -d cipher.bin <key> <iv> plain.txt --nopad
 ```
 
 ---

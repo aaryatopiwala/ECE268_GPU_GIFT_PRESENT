@@ -25,7 +25,7 @@ Once compiled, you can run a specific cipher target directly from the build/ dir
 
 # CTR Mode (Requires the --nopad flag)
 ./present_ctr -e plain.txt <key> <iv> cipher.bin --nopad
-./present_ctr    -d cipher.bin <key> <iv> plain.txt --nopad
+./present_ctr -d cipher.bin <key> <iv> plain.txt --nopad
 ```
 
 ---

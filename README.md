@@ -10,22 +10,20 @@ Pranav Mehta (A17323782), Aarya Topiwala (A17295542), Diyou (Dill) Wang (A171187
 ├── tests/              # Directory for test files
 │
 ├── cpu/                       # CPU implementations directory
+│   ├── CMakeLists.txt
 │   ├── README.md
 │   ├── run_cpu.sh             # Runner script for CPU validation and benchmarking
 │   ├── present/
-│   │   ├── Makefile
 │   │   ├── present.hpp        # Shared logic: key schedule, encryption, decryption
 │   │   ├── present_ctr.cpp    # CTR mode wrapper for PRESENT
 │   │   └── present_cbc.cpp    # CBC mode wrapper for PRESENT
 │   │
 │   ├── gift/
-│   │   ├── Makefile
 │   │   ├── gift.hpp           # Shared logic: key schedule, encryption, decryption
 │   │   ├── gift_ctr.cpp       # CTR mode wrapper for GIFT
 │   │   └── gift_cbc.cpp       # CBC mode wrapper for GIFT
 │   │
 │   └── aes/
-│       ├── Makefile
 │       ├── aes.hpp            # Shared logic: key schedule, encryption, decryption
 │       ├── aes_ctr.cpp        # CTR mode wrapper for AES
 │       └── aes_cbc.cpp        # CBC mode wrapper for AES
@@ -34,7 +32,6 @@ Pranav Mehta (A17323782), Aarya Topiwala (A17295542), Diyou (Dill) Wang (A171187
     ├── CMakeLists.txt
     ├── README.md
     ├── run_gpu.sh             # Runner script for GPU validation and benchmarking
-    │
     ├── utils/                 # Useful GPU setup, timing, and T table generation tools 
     │
     ├── present/
