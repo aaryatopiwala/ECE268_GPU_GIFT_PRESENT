@@ -2,8 +2,8 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CPU_RUNNER="$REPO_DIR/cpu/run_tests.sh"
-GPU_RUNNER="$REPO_DIR/gpu/run_tests.sh"
+CPU_RUNNER="$REPO_DIR/cpu/run_cpu.sh"
+GPU_RUNNER="$REPO_DIR/gpu/run_gpu.sh"
 
 BACKEND="all"
 ARGS=()

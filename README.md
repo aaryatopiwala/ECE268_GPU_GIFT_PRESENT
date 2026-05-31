@@ -1,4 +1,57 @@
-# ECE 268 Final Project
+# GPU-Accelerated PRESENT-80 and GIFT-128 Block Ciphers
+
+Pranav Mehta (A17323782), Aarya Topiwala (A17295542), Diyou (Dill) Wang (A17118730)
+
+## Repository Structure
+
+```text
+├── README.md
+├── run.sh                 # Single script to test both CPU and GPU implementations
+├── tests/              # Directory for test files
+│
+├── cpu/                       # CPU implementations directory
+│   ├── README.md
+│   ├── run_cpu.sh             # Runner script for CPU validation and benchmarking
+│   ├── present/
+│   │   ├── Makefile
+│   │   ├── present.hpp        # Shared logic: key schedule, encryption, decryption
+│   │   ├── present_ctr.cpp    # CTR mode wrapper for PRESENT
+│   │   └── present_cbc.cpp    # CBC mode wrapper for PRESENT
+│   │
+│   ├── gift/
+│   │   ├── Makefile
+│   │   ├── gift.hpp           # Shared logic: key schedule, encryption, decryption
+│   │   ├── gift_ctr.cpp       # CTR mode wrapper for GIFT
+│   │   └── gift_cbc.cpp       # CBC mode wrapper for GIFT
+│   │
+│   └── aes/
+│       ├── Makefile
+│       ├── aes.hpp            # Shared logic: key schedule, encryption, decryption
+│       ├── aes_ctr.cpp        # CTR mode wrapper for AES
+│       └── aes_cbc.cpp        # CBC mode wrapper for AES
+│
+└── gpu/                       # GPU implementations directory
+    ├── CMakeLists.txt
+    ├── README.md
+    ├── run_gpu.sh             # Runner script for GPU validation and benchmarking
+    │
+    ├── utils/                 # Useful GPU setup, timing, and T table generation tools 
+    │
+    ├── present/
+    │   ├── present.cuh        # Shared logic: key schedule, encryption, decryption
+    │   ├── present_ctr.cu     # CTR mode wrapper for PRESENT
+    │   └── present_cbc.cu     # CBC mode wrapper for PRESENT
+    │
+    ├── gift/
+    │   ├── gift.cuh           # Shared logic: key schedule, encryption, decryption
+    │   ├── gift_ctr.cu        # CTR mode wrapper for GIFT
+    │   └── gift_cbc.cu        # CBC mode wrapper for GIFT
+    │
+    └── aes/
+        ├── aes.cuh            # Shared logic: key schedule, encryption, decryption
+        ├── aes_ctr.cu         # CTR mode wrapper for AES
+        └── aes_cbc.cu         # CBC mode wrapper for AES
+```
 
 ## Compilation (CPU)
 
@@ -10,8 +63,8 @@
 1. ```cd``` into the ```gpu``` directory
 2. Read the gpu [README](gpu/README.md) for more info
 
-## Tests
+## Testing
 
-1. run ```run_tests.sh``` in root directory or ```cd``` into subdirectories like ```gpu``` or ```cpu```
+1. run ```run.sh``` in root directory or ```cd``` into subdirectories like ```gpu``` or ```cpu```
 2. Use ```gen_test_file.py``` in ```tests``` directory to generate more test files with difference sizes measured in MB.
 3. Use command ```python3 gen_test_file.py ouput --mb size``` to generate more test files.
