@@ -86,6 +86,22 @@ __device__ int present80_encrypt(const uint64_t *plaintext, const uint64_t *roun
             new_state |= d_T[i][nibble];
         }
         state = new_state;
+
+        // // s-box layer
+        // for (int i = 0; i < 16; i++) {
+        //     uint8_t fourbits = (state >> (4 * i)) & 0xF;
+        //     fourbits = sbox[fourbits];
+        //     state = (state & ~((uint64_t)0xF << (4 * i))) | ((uint64_t)fourbits << (4 * i));
+        // }
+
+        // // p-layer
+        // uint64_t new_state = 0;
+        // for (int i = 0; i < 64; i++) {
+        //     uint8_t bit = (state >> i) & 1;
+        //     new_state |= ((uint64_t)bit << p_layer[i]);
+        // }
+        // state = new_state;
+
         //fprintf(stdout, "Round %d: %016lx\n", round, state);
     }
 
