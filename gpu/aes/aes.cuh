@@ -131,7 +131,7 @@ __device__ void mixColumns(uint8_t state[4][4], uint8_t newState[4][4]) {
     }
 }
 
-__device__ int aes128_encrypt(const uint64_t *plaintext, const uint64_t *round_keys, uint64_t *ciphertext) {
+__device__ int aes128_encrypt(const uint64_t *plaintext, const uint32_t *round_keys, uint64_t *ciphertext) {
     
     // state
     uint64_t state1 = plaintext[0];
@@ -251,7 +251,7 @@ __device__ void invMixColumns(uint8_t state[4][4], uint8_t newState[4][4]) {
     }
 }
 
-__device__ int aes128_decrypt(const uint64_t *ciphertext, const uint64_t *round_keys, uint64_t *plaintext) {
+__device__ int aes128_decrypt(const uint64_t *ciphertext, const uint32_t *round_keys, uint64_t *plaintext) {
     // state
     uint64_t state1 = ciphertext[0];
     uint64_t state2 = ciphertext[1];

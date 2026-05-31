@@ -104,11 +104,11 @@ int main(int argc, char *argv[]) {
     uint8_t*  d_in;
     uint8_t*  d_out;
     uint64_t* d_key;
-    uint64_t* d_round_keys;
+    uint32_t* d_round_keys;
     cudaMalloc(&d_in,  BUFFER_SIZE + 16);
     cudaMalloc(&d_out, BUFFER_SIZE + 16);
     cudaMalloc(&d_key, 2 * sizeof(uint64_t));
-    cudaMalloc(&d_round_keys, 32 * sizeof(uint64_t));
+    cudaMalloc(&d_round_keys, 44 * sizeof(uint32_t));
     cudaMemcpy(d_key, key, 2 * sizeof(uint64_t), cudaMemcpyHostToDevice);
 
     cudaStream_t streams[NUM_STREAMS];
