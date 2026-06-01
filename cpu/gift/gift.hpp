@@ -2,6 +2,8 @@
 #include <cstring>
 #include <cstdio>
 
+#define USE_CPU_GIFT_TTABLE 1
+
 const uint8_t sbox[16] = {
     0x1, 0xA, 0x4, 0xC, 0x6, 0xF, 0x3, 0x9,
     0x2, 0xD, 0xB, 0x7, 0x5, 0x0, 0x8, 0xE
@@ -74,8 +76,138 @@ static void get_round_keys(const uint64_t *key, uint64_t *round_keys) {
     memcpy(round_keys, curr_round_keys, sizeof(uint64_t) * 80);
 }
 
+static uint64_t gift128_T[32][16][2];
+static bool gift128_T_valid = false;
 
-int gift128_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
+static void init_gift128_ttable_cpu() {
+    if (gift128_T_valid) return;
+
+    memset(gift128_T, 0, sizeof(gift128_T));
+
+    for (int n = 0; n < 32; n++) {
+        for (int v = 0; v < 16; v++) {
+            uint8_t y = sbox[v];
+
+            uint64_t out1 = 0;
+            uint64_t out2 = 0;
+
+            for (int b = 0; b < 4; b++) {
+                if ((y >> b) & 1) {
+                    int src_pos = 4 * n + b;
+                    int dst_pos = p_layer[src_pos];
+
+                    if (dst_pos < 64)
+                        out1 |= (1ULL << dst_pos);
+                    else
+                        out2 |= (1ULL << (dst_pos - 64));
+                }
+            }
+
+            gift128_T[n][v][0] = out1;
+            gift128_T[n][v][1] = out2;
+        }
+    }
+
+    gift128_T_valid = true;
+}
+
+static void get_round_masks_cpu(const uint64_t *key, uint64_t *round_masks) {
+    static uint64_t curr_key[2] = {0, 0};
+    static uint64_t curr_masks[80] = {0};
+    static bool valid = false;
+
+    if (!valid || curr_key[0] != key[0] || curr_key[1] != key[1]) {
+        uint64_t round_keys[80];
+        get_round_keys(key, round_keys);
+
+        for (int i = 0; i < 40; i++) {
+            uint64_t mask1 = 0;
+            uint64_t mask2 = 0;
+
+            uint64_t u = round_keys[2*i];
+            uint64_t v = round_keys[2*i + 1];
+
+            for (int j = 0; j < 32; j++) {
+                uint64_t u_bit = (u >> j) & 1ULL;
+                uint64_t v_bit = (v >> j) & 1ULL;
+
+                int u_index = 4*j + 2;
+                int v_index = 4*j + 1;
+
+                if (u_bit) {
+                    if (u_index < 64)
+                        mask1 ^= (1ULL << u_index);
+                    else
+                        mask2 ^= (1ULL << (u_index - 64));
+                }
+
+                if (v_bit) {
+                    if (v_index < 64)
+                        mask1 ^= (1ULL << v_index);
+                    else
+                        mask2 ^= (1ULL << (v_index - 64));
+                }
+            }
+
+            mask2 ^= (1ULL << 63);
+
+            mask1 ^= (uint64_t)((round_constants[i] >> 5) & 1) << 23;
+            mask1 ^= (uint64_t)((round_constants[i] >> 4) & 1) << 19;
+            mask1 ^= (uint64_t)((round_constants[i] >> 3) & 1) << 15;
+            mask1 ^= (uint64_t)((round_constants[i] >> 2) & 1) << 11;
+            mask1 ^= (uint64_t)((round_constants[i] >> 1) & 1) << 7;
+            mask1 ^= (uint64_t)((round_constants[i] >> 0) & 1) << 3;
+
+            curr_masks[2*i] = mask1;
+            curr_masks[2*i + 1] = mask2;
+        }
+
+        curr_key[0] = key[0];
+        curr_key[1] = key[1];
+        valid = true;
+    }
+
+    memcpy(round_masks, curr_masks, sizeof(uint64_t) * 80);
+}
+
+static int gift128_encrypt_ttable_cpu(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
+    init_gift128_ttable_cpu();
+
+    uint64_t round_masks[80];
+    get_round_masks_cpu(key, round_masks);
+
+    uint64_t state1 = plaintext[0];
+    uint64_t state2 = plaintext[1];
+
+    for (int r = 0; r < 40; r++) {
+        uint64_t new_state1 = 0;
+        uint64_t new_state2 = 0;
+
+        for (int n = 0; n < 16; n++) {
+            uint8_t nib = (state1 >> (4*n)) & 0xF;
+            new_state1 ^= gift128_T[n][nib][0];
+            new_state2 ^= gift128_T[n][nib][1];
+        }
+
+        for (int n = 0; n < 16; n++) {
+            uint8_t nib = (state2 >> (4*n)) & 0xF;
+            int idx = n + 16;
+            new_state1 ^= gift128_T[idx][nib][0];
+            new_state2 ^= gift128_T[idx][nib][1];
+        }
+
+        state1 = new_state1 ^ round_masks[2*r];
+        state2 = new_state2 ^ round_masks[2*r + 1];
+    }
+
+    ciphertext[0] = state1;
+    ciphertext[1] = state2;
+
+    return 0;
+}
+
+
+int gift128_encrypt_reference(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
     uint64_t state1 = plaintext[0];
     uint64_t state2 = plaintext[1];
 
@@ -162,6 +294,14 @@ int gift128_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ci
     uint64_t final_state[2] = {state1, state2};
     memcpy(ciphertext, &final_state, 16); // Copy the final state to ciphertext
     return 0; // Return 0 on success
+}
+
+int gift128_encrypt(const uint64_t *plaintext, const uint64_t *key, uint64_t *ciphertext) {
+#if USE_CPU_GIFT_TTABLE
+    return gift128_encrypt_ttable_cpu(plaintext, key, ciphertext);
+#else
+    return gift128_encrypt_reference(plaintext, key, ciphertext);
+#endif
 }
 
 const uint8_t inv_sbox[16] = {

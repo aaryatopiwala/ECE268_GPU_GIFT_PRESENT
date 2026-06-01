@@ -8,6 +8,7 @@
 
 #define BUFFER_SIZE (8 * 1024 * 1024)
 #define GIFT128_BLOCK_BYTES 16
+#define USE_GIFT_CBC_TTABLE 0
 
 __constant__ Gift128Block d_gift128_RK[GIFT128_ROUNDS];
 
@@ -110,7 +111,7 @@ __device__ __forceinline__ Gift128Block gift128_encrypt(Gift128Block state) {
     return state;
 }
 
-__global__ void encryptCBCKernel(const uint8_t* plaintext, uint8_t* ciphertext, size_t length, Gift128Block iv) {
+__global__ void encryptCBCKernel_ttable(const uint8_t* plaintext, uint8_t* ciphertext, size_t length, Gift128Block iv) {
     Gift128Block prev = iv;
     size_t nblocks = length / GIFT128_BLOCK_BYTES;
 
@@ -123,6 +124,46 @@ __global__ void encryptCBCKernel(const uint8_t* plaintext, uint8_t* ciphertext, 
         Gift128Block c = gift128_encrypt(x);
 
         gift_store_block(ciphertext + b * GIFT128_BLOCK_BYTES, c);
+
+        prev = c;
+    }
+}
+
+__global__ void encryptCBCKernel_bitslice(
+    const uint8_t* plaintext,
+    uint8_t* ciphertext,
+    size_t length,
+    const uint16_t* key,
+    Gift128Block iv
+) {
+    int lane = threadIdx.x & 31;
+
+    uint16_t local_key[8];
+    #pragma unroll
+    for (int i = 0; i < 8; i++)
+        local_key[i] = key[i];
+
+    Gift128Block prev = iv;
+    size_t nblocks = length / GIFT128_BLOCK_BYTES;
+
+    for (size_t b = 0; b < nblocks; b++) {
+        Gift128Block x;
+        x.lo = 0;
+        x.hi = 0;
+
+        if (lane == 0) {
+            x = gift_load_block(plaintext + b * GIFT128_BLOCK_BYTES);
+            x.lo ^= prev.lo;
+            x.hi ^= prev.hi;
+        }
+
+        Gift128Block c = gift128_encrypt_bl(x, local_key, FULL_MASK);
+
+        c.lo = __shfl_sync(FULL_MASK, c.lo, 0);
+        c.hi = __shfl_sync(FULL_MASK, c.hi, 0);
+
+        if (lane == 0)
+            gift_store_block(ciphertext + b * GIFT128_BLOCK_BYTES, c);
 
         prev = c;
     }
@@ -282,7 +323,11 @@ int main(int argc, char* argv[]) {
         cudaMemcpy(d_in, h_in, process_size, cudaMemcpyHostToDevice);
         
         if (strcmp(argv[1], "-e") == 0) {
-            encryptCBCKernel<<<1, 1>>>(d_in, d_out, process_size, iv);
+            #if USE_GIFT_CBC_TTABLE
+            encryptCBCKernel_ttable<<<1, 1>>>(d_in, d_out, process_size, iv);
+            #else
+            encryptCBCKernel_bitslice<<<1, 32>>>(d_in, d_out, process_size, d_key, iv);
+            #endif
         } else {
             int num_blocks = process_size / GIFT128_BLOCK_BYTES;
             int threads = 256;
