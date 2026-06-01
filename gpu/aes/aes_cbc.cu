@@ -9,7 +9,7 @@
 #define BUFFER_SIZE (8 * 1024 * 1024)
 #define NUM_STREAMS 4
 
-__global__ void encryptCBCKernel(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint64_t* round_keys, uint64_t prev_cipher_low, uint64_t prev_cipher_high) {
+__global__ void encryptCBCKernel(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint32_t* round_keys, uint64_t prev_cipher_low, uint64_t prev_cipher_high) {
     for (size_t i = 0; i < length; i += 16) {
         uint64_t block1 = ((uint64_t)plaintext[i] << 56) | ((uint64_t)plaintext[i+1] << 48) |
                 ((uint64_t)plaintext[i+2] << 40) | ((uint64_t)plaintext[i+3] << 32) |
@@ -49,7 +49,7 @@ __global__ void encryptCBCKernel(const uint8_t *plaintext, uint8_t *ciphertext, 
     }
 }
 
-__global__ void decryptCBCKernel(const uint8_t *ciphertext, uint8_t *plaintext, size_t length, const uint64_t* round_keys, uint64_t iv_hi, uint64_t iv_lo) {
+__global__ void decryptCBCKernel(const uint8_t *ciphertext, uint8_t *plaintext, size_t length, const uint32_t* round_keys, uint64_t iv_hi, uint64_t iv_lo) {
     size_t tid    = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
     for (size_t i = tid * 16; i < length; i += stride * 16) {

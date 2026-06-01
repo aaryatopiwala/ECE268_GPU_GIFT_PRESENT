@@ -9,7 +9,7 @@
 #define BUFFER_SIZE (8 * 1024 * 1024)
 #define NUM_STREAMS 4
 
-__global__ void encryptCTRKernel(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint64_t* round_keys, uint64_t counter_hi, uint64_t counter_lo) {
+__global__ void encryptCTRKernel(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint32_t* round_keys, uint64_t counter_hi, uint64_t counter_lo) {
     size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
     for (size_t i = tid * 16; i < length; i += stride * 16) {
