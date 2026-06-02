@@ -5,6 +5,9 @@
 
 #define GIFT128_ROUNDS 40
 #define FULL_MASK 0xffffffffu
+__constant__ uint32_t d_gift128_U[GIFT128_ROUNDS];
+__constant__ uint32_t d_gift128_V[GIFT128_ROUNDS];
+__constant__ uint8_t  d_gift128_RC[GIFT128_ROUNDS];
 
 struct Gift128Block {
     uint64_t lo;
@@ -118,6 +121,50 @@ __device__ __forceinline__ void gift128_round_keys(const uint16_t key[8], uint32
     }
 }
 
+static void init_gift128_round_keys_device(const uint16_t key[8]) {
+    uint32_t h_U[GIFT128_ROUNDS];
+    uint32_t h_V[GIFT128_ROUNDS];
+    uint8_t  h_RC[GIFT128_ROUNDS];
+
+    uint16_t k[8];
+    for (int i = 0; i < 8; i++)
+        k[i] = key[i];
+
+    uint8_t c = 0;
+
+    for (int r = 0; r < GIFT128_ROUNDS; r++) {
+        int c5 = (c >> 5) & 1;
+        int c4 = (c >> 4) & 1;
+        c = (uint8_t)(((c << 1) & 0x3e) | (c5 ^ c4 ^ 1));
+
+        h_RC[r] = c;
+        h_U[r] = ((uint32_t)k[5] << 16) | k[4];
+        h_V[r] = ((uint32_t)k[1] << 16) | k[0];
+
+        uint16_t k0 = k[0];
+        uint16_t k1 = k[1];
+        uint16_t k2 = k[2];
+        uint16_t k3 = k[3];
+        uint16_t k4 = k[4];
+        uint16_t k5 = k[5];
+        uint16_t k6 = k[6];
+        uint16_t k7 = k[7];
+
+        k[7] = rotr16(k1, 2);
+        k[6] = rotr16(k0, 12);
+        k[5] = k7;
+        k[4] = k6;
+        k[3] = k5;
+        k[2] = k4;
+        k[1] = k3;
+        k[0] = k2;
+    }
+
+    cudaMemcpyToSymbol(d_gift128_U,  h_U,  sizeof(h_U));
+    cudaMemcpyToSymbol(d_gift128_V,  h_V,  sizeof(h_V));
+    cudaMemcpyToSymbol(d_gift128_RC, h_RC, sizeof(h_RC));
+}
+
 __device__ __forceinline__ void gift128_pack(uint32_t p[128], Gift128Block x, unsigned mask) {
     #pragma unroll
     for (int i = 0; i < 64; i++)
@@ -222,36 +269,28 @@ __device__ __forceinline__ void gift128_add_key(uint32_t p[128], uint32_t U, uin
     if ((rc >> 0) & 1u) p[3]  ^= 0xffffffffu;
 }
 
-__device__ __forceinline__ Gift128Block gift128_encrypt_bl(Gift128Block in, const uint16_t key[8], unsigned mask) {
-    uint32_t U[GIFT128_ROUNDS];
-    uint32_t V[GIFT128_ROUNDS];
-    uint8_t RC[GIFT128_ROUNDS];
+__device__ __forceinline__ Gift128Block gift128_encrypt_bl(Gift128Block in, unsigned mask) {
     uint32_t p[128];
 
-    gift128_round_keys(key, U, V, RC);
     gift128_pack(p, in, mask);
 
     #pragma unroll
     for (int r = 0; r < GIFT128_ROUNDS; r++) {
         gift128_subcells(p, false);
         gift128_permute(p);
-        gift128_add_key(p, U[r], V[r], RC[r]);
+        gift128_add_key(p, d_gift128_U[r], d_gift128_V[r], d_gift128_RC[r]);
     }
 
     return gift128_unpack(p, threadIdx.x & 31);
 }
 
-__device__ __forceinline__ Gift128Block gift128_decrypt_warp_bitslice(Gift128Block in, const uint16_t key[8], unsigned mask) {
-    uint32_t U[GIFT128_ROUNDS];
-    uint32_t V[GIFT128_ROUNDS];
-    uint8_t RC[GIFT128_ROUNDS];
+__device__ __forceinline__ Gift128Block gift128_decrypt_warp_bitslice(Gift128Block in, unsigned mask) {
     uint32_t p[128];
 
-    gift128_round_keys(key, U, V, RC);
     gift128_pack(p, in, mask);
 
     for (int r = GIFT128_ROUNDS - 1; r >= 0; r--) {
-        gift128_add_key(p, U[r], V[r], RC[r]);
+        gift128_add_key(p, d_gift128_U[r], d_gift128_V[r], d_gift128_RC[r]);
         gift128_inv_permute(p);
         gift128_subcells(p, true);
     }

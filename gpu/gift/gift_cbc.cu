@@ -133,15 +133,9 @@ __global__ void encryptCBCKernel_bitslice(
     const uint8_t* plaintext,
     uint8_t* ciphertext,
     size_t length,
-    const uint16_t* key,
     Gift128Block iv
 ) {
     int lane = threadIdx.x & 31;
-
-    uint16_t local_key[8];
-    #pragma unroll
-    for (int i = 0; i < 8; i++)
-        local_key[i] = key[i];
 
     Gift128Block prev = iv;
     size_t nblocks = length / GIFT128_BLOCK_BYTES;
@@ -157,7 +151,7 @@ __global__ void encryptCBCKernel_bitslice(
             x.hi ^= prev.hi;
         }
 
-        Gift128Block c = gift128_encrypt_bl(x, local_key, FULL_MASK);
+        Gift128Block c = gift128_encrypt_bl(x, FULL_MASK);
 
         c.lo = __shfl_sync(FULL_MASK, c.lo, 0);
         c.hi = __shfl_sync(FULL_MASK, c.hi, 0);
@@ -169,7 +163,7 @@ __global__ void encryptCBCKernel_bitslice(
     }
 }
 
-__global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext, size_t length, const uint16_t* key, Gift128Block iv) {
+__global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext, size_t length, Gift128Block iv) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int lane = threadIdx.x & 31;
     int warp_global = tid >> 5;
@@ -181,11 +175,6 @@ __global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext, 
     unsigned mask = __ballot_sync(FULL_MASK, active);
     if (mask == 0) return;
 
-    uint16_t local_key[8];
-    #pragma unroll
-    for (int i = 0; i < 8; i++)
-        local_key[i] = key[i];
-
     Gift128Block c;
     c.lo = 0;
     c.hi = 0;
@@ -193,7 +182,7 @@ __global__ void decryptCBCKernel(const uint8_t* ciphertext, uint8_t* plaintext, 
     if (active)
         c = gift_load_block(ciphertext + byte_idx);
 
-    Gift128Block dec = gift128_decrypt_warp_bitslice(c, local_key, mask);
+    Gift128Block dec = gift128_decrypt_warp_bitslice(c, mask);
 
     if (active) {
         Gift128Block prev;
@@ -276,6 +265,7 @@ int main(int argc, char* argv[]) {
     uint16_t key[8];
     hex_to_key(argv[3], key);
 
+    init_gift128_round_keys_device(key);
     init_gift128_round_masks(key);
 
     Gift128Block iv;
@@ -292,12 +282,9 @@ int main(int argc, char* argv[]) {
     // Device buffers and key
     uint8_t* d_in;
     uint8_t* d_out;
-    uint16_t* d_key;
 
     cudaMalloc(&d_in,  BUFFER_SIZE + GIFT128_BLOCK_BYTES);
     cudaMalloc(&d_out, BUFFER_SIZE + GIFT128_BLOCK_BYTES);
-    cudaMalloc(&d_key, 8 * sizeof(uint16_t));
-    cudaMemcpy(d_key, key, 8 * sizeof(uint16_t), cudaMemcpyHostToDevice);
 
     Timer t;
     t.start();
@@ -326,7 +313,7 @@ int main(int argc, char* argv[]) {
             #if USE_GIFT_CBC_TTABLE
             encryptCBCKernel_ttable<<<1, 1>>>(d_in, d_out, process_size, iv);
             #else
-            encryptCBCKernel_bitslice<<<1, 32>>>(d_in, d_out, process_size, d_key, iv);
+            encryptCBCKernel_bitslice<<<1, 32>>>(d_in, d_out, process_size, iv);
             #endif
         } else {
             int num_blocks = process_size / GIFT128_BLOCK_BYTES;
@@ -335,7 +322,7 @@ int main(int argc, char* argv[]) {
             int blocks = (warps * 32 + threads - 1) / threads;
             if (blocks == 0) blocks = 1;
         
-            decryptCBCKernel<<<blocks, threads>>>(d_in, d_out, process_size, d_key, iv);
+            decryptCBCKernel<<<blocks, threads>>>(d_in, d_out, process_size, iv);
         }
         
         cudaDeviceSynchronize();
@@ -362,7 +349,6 @@ int main(int argc, char* argv[]) {
 
     cudaFree(d_in);
     cudaFree(d_out);
-    cudaFree(d_key);
 
     cudaFreeHost(h_in);
     cudaFreeHost(h_out);

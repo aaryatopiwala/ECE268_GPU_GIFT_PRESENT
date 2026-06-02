@@ -28,7 +28,7 @@ __device__ __forceinline__ void store_xor_be128(uint8_t* out, const uint8_t* in,
     out[15] = ((ks.lo >> 0) & 0xFF) ^ in[15];
 }
 
-__global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext, size_t length, const uint16_t* key, Gift128Block counter) {
+__global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext, size_t length, Gift128Block counter) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int lane = threadIdx.x & 31;
     int warp_global = tid >> 5;
@@ -40,17 +40,12 @@ __global__ void encryptCTRKernel(const uint8_t* plaintext, uint8_t* ciphertext, 
     unsigned mask = __ballot_sync(FULL_MASK, active);
     if (mask == 0) return;
 
-    uint16_t local_key[8];
-    #pragma unroll
-    for (int i = 0; i < 8; i++)
-        local_key[i] = key[i];
-
     Gift128Block ctr;
     ctr.lo = counter.lo + (uint64_t)block_idx;
     ctr.hi = counter.hi + (ctr.lo < counter.lo ? 1ull : 0ull);
 
-    Gift128Block ks = gift128_encrypt_bl(ctr, local_key, mask);
-
+    Gift128Block ks = gift128_encrypt_bl(ctr, mask);
+    
     if (active)
         store_xor_be128(ciphertext + byte_idx, plaintext + byte_idx, ks);
 }
@@ -118,6 +113,8 @@ int main(int argc, char* argv[]) {
 
     uint16_t key[8];
     hex_to_key(argv[3], key);
+    init_gift128_round_keys_device(key);
+
 
     Gift128Block iv;
     hex_to_iv(argv[4], &iv);
@@ -138,12 +135,9 @@ int main(int argc, char* argv[]) {
     // Device buffers and key
     uint8_t* d_in;
     uint8_t* d_out;
-    uint16_t* d_key;
 
     cudaMalloc(&d_in,  BUFFER_SIZE + GIFT128_BLOCK_BYTES);
     cudaMalloc(&d_out, BUFFER_SIZE + GIFT128_BLOCK_BYTES);
-    cudaMalloc(&d_key, 8 * sizeof(uint16_t));
-    cudaMemcpy(d_key, key, 8 * sizeof(uint16_t), cudaMemcpyHostToDevice);
 
     cudaStream_t streams[NUM_STREAMS];
     for (int i = 0; i < NUM_STREAMS; i++)
@@ -190,7 +184,7 @@ int main(int argc, char* argv[]) {
             if (blocks == 0) blocks = 1;
 
             cudaMemcpyAsync(d_in + offset, h_in + offset, current_chunk_size, cudaMemcpyHostToDevice, streams[s]);
-            encryptCTRKernel<<<blocks, threads, 0, streams[s]>>>(d_in + offset, d_out + offset, current_chunk_size, d_key, stream_counter);
+            encryptCTRKernel<<<blocks, threads, 0, streams[s]>>>(d_in + offset, d_out + offset, current_chunk_size, stream_counter);
             cudaMemcpyAsync(h_out + offset, d_out + offset, current_chunk_size, cudaMemcpyDeviceToHost, streams[s]);
         }
         cudaDeviceSynchronize();
@@ -215,7 +209,6 @@ int main(int argc, char* argv[]) {
 
     cudaFree(d_in);
     cudaFree(d_out);
-    cudaFree(d_key);
 
     cudaFreeHost(h_in);
     cudaFreeHost(h_out);
